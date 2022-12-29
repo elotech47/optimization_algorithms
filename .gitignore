@@ -33,6 +33,10 @@ MANIFEST
 *.manifest
 *.spec
 
+# My stuff
+note.md 
+exp.ipynb
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
