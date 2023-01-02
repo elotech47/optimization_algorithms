@@ -83,33 +83,36 @@ class OptEnv(gym.Env):
 
         states = self.state  # get the current state
         bestAgent = np.argmax(self.state[:,-1]) # get the best agent
-        zprev = states[:, -1].copy() # store the previous state
+        zprev = states[:].copy() # store the previous state
         states[:, :-1] += actions # update the state
         if self.freeze:
             states[bestAgent, :-1] = zprev[bestAgent, :-1] # freeze the best agent
         states[:, :-1] = np.clip(states[:, :-1], 0, 1) # clip the state to be in [0,1]
         obj_values = self.optFunc(self._rescale(states[:, :-1], self.min_pos, self.max_pos)) # get the objective values
         # add obj_values to ValueHistory for each step
-        self.ValueHistory[:, self.current_step] = obj_values
+        self.ValueHistory[:, self.current_step+1] = obj_values
         # calculate the reward
         if self.current_step >= self.ep_length-1:
             self.done = True
         # add self.done to all agents without for loop
         agents_done = np.array([self.done for _ in range(self.n_agents)])
-        
-        
+        self.current_step += 1  # Increment step counter
+
         # update best objective value
         if self.minimize:
-            if np.min(obj_values) <= self.best:
-                self.best = np.min(obj_values)
+            if np.min(obj_values) < self.best:
+                self.best, self.best_pos = np.min(obj_values), np.argmin(obj_values)
+                self.best_time_step = self.current_step
             if np.max(obj_values) > self.worst:
-                self.worst = np.max(obj_values)
-                #print("Worst: ", self.worst)
+                self.worst, self.worst_pos = np.max(obj_values), np.argmax(obj_values)
+                self.best_time_step = self.current_step
         else:
-            if np.max(obj_values) >= self.best:
-                self.best = np.max(obj_values)
+            if np.max(obj_values) > self.best:
+                self.best, self.best_pos = np.max(obj_values), np.argmax(obj_values)
+                self.best_time_step = self.current_step
             if np.min(obj_values) < self.worst:
-                self.worst = np.min(obj_values)
+                self.worst, self.worst_pos = np.min(obj_values), np.argmin(obj_values)
+                self.best_time_step = self.current_step
 
         # scale objective value to [0, 1]
         states[:, -1] = self._scale(obj_values, self.worst, self.best)
@@ -119,8 +122,6 @@ class OptEnv(gym.Env):
         self.refinement_idx = self._get_refinement_idxs()
         # get the reward for each agent
         rewards = self._reward_fn(bestAgent)
-        self.current_step += 1  # Increment step counter
-        
         return self.state, rewards, agents_done, obj_values
 
     def _scale(self, x, min, max):
@@ -150,7 +151,6 @@ class OptEnv(gym.Env):
             init_pos = np.round(np.random.uniform(low=self.obs_low[0][:-1], high=self.obs_high[0][:-1],), decimals=2)
         else:
             init_pos = np.array(self.init_state)
-        
         # generate a random initial position for all agents at once
         init_pos = np.round(np.random.uniform(low=self.obs_low[0][:-1], high=self.obs_high[0][:-1], size=(self.n_agents, self.n_dim)), decimals=2)
         # get the objective value of the initial position
@@ -173,17 +173,40 @@ class OptEnv(gym.Env):
         #super().reset()
         self.current_step = 0
         self.state = self._generate_init_state() #np.array([self._generate_init_state(agent) for agent in range(self.n_agents)])
-        self.ValueHistory = np.zeros(shape=(self.n_agents, self.ep_length)) # store the objective value history of each agent
-        self.ValueHistory[:, 0] = self.state[:, -1]
-        self.best = np.max(self.state[:, -1])
-        self.worst = np.min(self.state[:, -1])
+        self.ValueHistory = np.zeros(shape=(self.n_agents, self.ep_length+1)) # store the objective value history of each agent
+        self.ValueHistory[:, self.current_step] = self.state[:, -1]
+        if self.minimize:
+            self.best, self.best_pos = np.min(self.state[:, -1]), np.argmin(self.state[:, -1])
+            self.worst, self.worst_pos = np.max(self.state[:, -1]), np.argmax(self.state[:, -1])
+        else:
+            self.best, self.best_pos = np.max(self.state[:, -1]), np.argmax(self.state[:, -1]) # store the best objective value and its position
+            self.worst, self.worst_pos = np.min(self.state[:, -1]), np.argmin(self.state[:, -1]) # store the worst objective value and its position
+        self.best_time_step = 0  # store the time step when the best objective value is found
         self.state[:,-1] = self._scale(self.state[:,-1], self.worst, self.best)
-        self.stateHistory = np.zeros(shape=(self.n_agents, self.ep_length, self.n_dim + 1)) # store the state history of each agent
-        self.stateHistory[:, 0, :] = self.state
+        self.stateHistory = np.zeros(shape=(self.n_agents, self.ep_length+1, self.n_dim + 1)) # store the state history of each agent
+        self.stateHistory[:, self.current_step, :] = self.state
         self.refinement_idx = self._get_refinement_idxs()
         return np.array(self.state, dtype=np.float32)
 
-
+    ## get best agent actual position and value
+    def get_best_agent(self):
+        if self.freeze:
+            if self.minimize:
+                bestAgent = np.argmin(self.state[:, -1])
+            else:
+                bestAgent = np.argmax(self.state[:, -1])
+            # rescale the position and objective value to the original scale
+            bestAgentPos = self._rescale(self.state[bestAgent, :2], self.min_pos, self.max_pos)
+            bestAgentVal = self._rescale(self.state[bestAgent, -1], self.worst, self.best)
+            return bestAgentPos, bestAgentVal
+        else:
+            # get the best agent position and value from the history using the best time step and the best agent position
+            bestAgentPos = self.stateHistory[self.best_pos, self.best_time_step, :2]
+            bestAgentVal = self.ValueHistory[self.best_pos, self.best_time_step]
+            # rescale the position and objective value to the original scale
+            bestAgentPos = self._rescale(bestAgentPos, self.min_pos, self.max_pos)
+            return bestAgentPos, bestAgentVal
+    
     def render(self):
         # render the environment to the screen if self.n_dim is <= 2
         if self.n_dim == 2:
@@ -209,6 +232,9 @@ class OptEnv(gym.Env):
     def close(self):
         # close the environment
         pass
+
+    
+
 
 
 if __name__ == "__main__":
