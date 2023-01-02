@@ -38,9 +38,9 @@ class OptEnv(gym.Env):
         self.refinement_idx = []
         self.fraq_refinement = fraq_refinement
         self.minimize = minimize
+        self.done = False
 
-        self.stateHistory = [deque(maxlen=self.ep_length) for _ in range(self.n_agents)] # store the state history of each agent
-        self.ValueHistory = [[] for _ in range(self.n_agents)] # store the value history of each agent
+        
         self.lower_bound_actions = np.array(
             [-np.inf for _ in range(self.n_dim)], dtype=np.float64) # lower bound of the action space
         self.upper_bound_actions = np.array(
@@ -75,33 +75,22 @@ class OptEnv(gym.Env):
         """
         assert self.action_space.contains(actions), f"{actions!r} ({type(actions)}) invalid" # check if the action is valid
 
-        agents_done = []
         states = self.state  # get the current state
-        obj_values = []
         bestAgent = np.argmax(self.state[:,-1]) # get the best agent
-        #zprev = states[:, -1].copy() # store the previous state
-        for agent in range(self.n_agents):
-            # Do not update the best agent if freeze is True
-            if agent == bestAgent and self.freeze:
-                pass
-            else:
-                for i in range(self.n_dim):
-                    # Update the state:
-                    states[agent][i] += actions[agent][i]
-            #Retrict the state to the bounds:
-            states[agent] = np.clip(states[agent], 0, 1)
-            # Get objective value:
-            ## rescale the state:
-            obj_v = self.optFunc(self._rescale(states[agent][:-1], self.min_pos, self.max_pos))
-            self.stateHistory[agent].append(states[agent])
-            self.ValueHistory[agent].append(obj_v)
-            obj_values.append(obj_v)
- 
-        done = False
+        zprev = states[:, -1].copy() # store the previous state
+        states[:, :-1] += actions # update the state
+        if self.freeze:
+            states[bestAgent, :-1] = zprev[bestAgent, :-1] # freeze the best agent
+        states[:, :-1] = np.clip(states[:, :-1], 0, 1) # clip the state to be in [0,1]
+        obj_values = self.optFunc(self._rescale(states[:, :-1], self.min_pos, self.max_pos)) # get the objective values
+        # add obj_values to ValueHistory for each step
+        self.ValueHistory[:, self.current_step] = obj_values
+        # calculate the reward
         if self.current_step >= self.ep_length-1:
-            done = True
-        for agent in range(self.n_agents):
-            agents_done.append(done)
+            self.done = True
+        # add self.done to all agents without for loop
+        agents_done = np.array([self.done for _ in range(self.n_agents)])
+        
         
         # update best objective value
         if self.minimize:
@@ -119,6 +108,8 @@ class OptEnv(gym.Env):
         # scale objective value to [0, 1]
         states[:, -1] = self._scale(obj_values, self.worst, self.best)
         self.state = states
+        # store StateHistory for each step
+        self.stateHistory[:, self.current_step, :] = self.state
         self.refinement_idx = self._get_refinement_idxs()
         # get the reward for each agent
         rewards = self._reward_fn(bestAgent)
@@ -128,7 +119,7 @@ class OptEnv(gym.Env):
 
     def _scale(self, x, min, max):
         """ Scale x to [0, 1]"""
-        return (x - min) / (max - min)
+        return (x - min) / ((max - min) + 1e-8)
 
     def _rescale(self, x, min, max):
         """ Rescale x from [0, 1] to [min, max]"""
@@ -144,39 +135,45 @@ class OptEnv(gym.Env):
         # if agent is stock for a long time, give it a negative reward
         for agent in range(self.n_agents):
             z_recent = self.ValueHistory[agent][-min(3, self.current_step):]
-            if len(np.unique(z_recent)) == 1 and self.current_step > 3:
+            if len(np.unique(z_recent)) == 1 and self.current_step > 3 and np.unique(z_recent) != 0:
                 reward[agent] = -1
         return reward
             
-    def _generate_init_state(self, agent):
+    def _generate_init_state(self):
         if self.init_state is None:
             init_pos = np.round(np.random.uniform(low=self.obs_low[0][:-1], high=self.obs_high[0][:-1],), decimals=2)
         else:
-            init_pos = np.array(self.init_state[agent])
-
-        #print("Initial position: ", init_pos)
+            init_pos = np.array(self.init_state)
+        
+        # generate a random initial position for all agents at once
+        init_pos = np.round(np.random.uniform(low=self.obs_low[0][:-1], high=self.obs_high[0][:-1], size=(self.n_agents, self.n_dim)), decimals=2)
+        # get the objective value of the initial position
         init_obj = self.optFunc(init_pos)
-        #print("Initial objective: ", init_obj)
+        # scale the position to [0, 1]
         init_pos = self._scale(init_pos, self.min_pos, self.max_pos)
-        init_obs = np.append(init_pos, init_obj)
+        # combine the position and objective value
+        init_obs = np.append(init_pos, init_obj.reshape(-1, 1), axis=1)
         return init_obs
     
     def _get_refinement_idxs(self):
-        sorted_idx = np.argsort(self.state[:, -1])[::-1]
-        print("Sorted idx: ", sorted_idx)
-        print("Fraq refinement: ", self.fraq_refinement)
-        print("N agents: ", self.n_agents)
+        if self.minimize:
+            sorted_idx = np.argsort(np.linalg.norm(self.state[:, :2] - self.state[np.argmin(self.state[:, -1]), :2], axis=1))
+        else:
+            sorted_idx = np.argsort(np.linalg.norm(self.state[:, :2] - self.state[np.argmax(self.state[:, -1]), :2], axis=1))
         n = int(self.fraq_refinement * self.n_agents)
         return sorted_idx[:n]
 
     def reset(self, seed: Optional[int] = None):
         #super().reset()
         self.current_step = 0
-        self.state = np.array([self._generate_init_state(agent) for agent in range(self.n_agents)])
+        self.state = self._generate_init_state() #np.array([self._generate_init_state(agent) for agent in range(self.n_agents)])
+        self.ValueHistory = np.zeros(shape=(self.n_agents, self.ep_length)) # store the objective value history of each agent
+        self.ValueHistory[:, 0] = self.state[:, -1]
         self.best = np.max(self.state[:, -1])
         self.worst = np.min(self.state[:, -1])
         self.state[:,-1] = self._scale(self.state[:,-1], self.worst, self.best)
-        print("Initial state value: ", self.state[:,-1])
+        self.stateHistory = np.zeros(shape=(self.n_agents, self.ep_length, self.n_dim + 1)) # store the state history of each agent
+        self.stateHistory[:, 0, :] = self.state
         self.refinement_idx = self._get_refinement_idxs()
         return np.array(self.state, dtype=np.float32)
 
