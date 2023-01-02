@@ -34,8 +34,8 @@ print(result)
 
 For more detailed usage examples and documentation, see the DeepHive documentation.
 
-Contributing
+### Contributing
 We welcome contributions to DeepHive! If you have an idea for a feature or bug fix, please open an issue or pull request on GitHub.
 
-License
+### License
 DeepHive is released under the MIT License.
