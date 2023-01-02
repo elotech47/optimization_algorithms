@@ -1,3 +1,11 @@
+""" 
+DeepHive environment: 
+    - The environment is a multi-agent environment where each agent is a particle in a swarm.
+    - The agents are initialized randomly in the search space.
+    - The agents are updated according to the DeepHive algorithm.
+    - The agents are rewarded based on the objective function.
+    - The agents are terminated when the episode length is reached.
+"""
 from gym.utils import seeding
 from gym import spaces
 from collections import deque
@@ -40,7 +48,6 @@ class OptEnv(gym.Env):
         self.minimize = minimize
         self.done = False
 
-        
         self.lower_bound_actions = np.array(
             [-np.inf for _ in range(self.n_dim)], dtype=np.float64) # lower bound of the action space
         self.upper_bound_actions = np.array(
@@ -58,8 +65,7 @@ class OptEnv(gym.Env):
 
         self.action_space = spaces.Box(
             low=self.action_low, high=self.action_high, shape=(
-                 self.n_agents,self.n_dim), dtype=np.float64
-        ) # gym action space
+                 self.n_agents,self.n_dim), dtype=np.float64) # gym action space
         self.observation_space = spaces.Box(
             self.obs_low, self.obs_high, dtype=np.float64) # gym observation space
     
