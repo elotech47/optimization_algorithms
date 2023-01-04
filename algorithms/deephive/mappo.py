@@ -58,19 +58,19 @@ class ActorCritic(nn.Module):
         super(ActorCritic, self).__init__()
 
         self.actor = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
+            nn.Linear(state_dim, hidden_dim[0]),
             nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim[0], hidden_dim[1]),
             nn.Tanh(),
-            nn.Linear(hidden_dim, action_dim),
+            nn.Linear(hidden_dim[1], action_dim),
         )
 
         self.critic = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
+            nn.Linear(state_dim, hidden_dim[0]),
             nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim[0], hidden_dim[1]),
             nn.Tanh(),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim[1], 1)
         )
 
         self.action_dim = action_dim
@@ -133,17 +133,14 @@ class MAPPO:
 
         if self.split_agent:
             # exploration Policy
-            exploration_state_dim = int(state_dim * split_fraq)
-            exploitation_state_dim = state_dim - exploration_state_dim
-
-            self.exploration_policy = ActorCritic(exploration_state_dim, action_dim, 
+            self.exploration_policy = ActorCritic(state_dim, action_dim, 
                                                 hidden_dim, self.episode_length,
                                                 init_std=init_std, std_min =std_min, 
                                                 std_max=std_max, std_type=std_type, 
                                                 fixed_std=fixed_std).to(self.device)
             
             # exploitation Policy
-            self.exploitation_policy = ActorCritic(exploitation_state_dim, action_dim, 
+            self.exploitation_policy = ActorCritic(state_dim, action_dim, 
                                                 hidden_dim, self.episode_length,
                                                 init_std=init_std, std_min =std_min, 
                                                 std_max=std_max, std_type=std_type, 
@@ -157,13 +154,13 @@ class MAPPO:
             self.exploitation_optimizer = torch.optim.Adam(self.exploitation_policy.parameters(), lr=self.lr, betas=(self.betas, 0.999))
 
             # old policy
-            self.exploration_old_policy = ActorCritic(exploration_state_dim, action_dim,
+            self.exploration_old_policy = ActorCritic(state_dim, action_dim,
                                                     hidden_dim, self.episode_length,
                                                     init_std=init_std, std_min =std_min,
                                                     std_max=std_max, std_type=std_type,
                                                     fixed_std=fixed_std).to(self.device)
 
-            self.exploitation_old_policy = ActorCritic(exploitation_state_dim, action_dim,
+            self.exploitation_old_policy = ActorCritic(state_dim, action_dim,
                                                     hidden_dim, self.episode_length,    
                                                     init_std=init_std, std_min =std_min,
                                                     std_max=std_max, std_type=std_type, 
@@ -188,7 +185,7 @@ class MAPPO:
 
         self.MSE_loss = nn.MSELoss()
 
-    def select_action(self, state, std_obs, iter, exploration_agents_idx):
+    def select_action(self, state, std_obs, iter, exploration_agents_idx=[]):
         if self.split_agent:
             # select action for exploration agents
             exploration_state = state[exploration_agents_idx]
@@ -204,26 +201,108 @@ class MAPPO:
             action = torch.cat((exploration_action, exploitation_action), dim=1)
             action_logprob = torch.cat((exploration_action_logprob, exploitation_action_logprob), dim=1)
 
-            # for i in range(action.shape[0]):
-            #     if i in exploration_agents_idx:
-            #         self.exploration_buffer.states.append(state[i])
-            #         self.exploration_buffer.actions.append(action[i])
-            #         self.exploration_buffer.logprobs.append(action_logprob[i])
-            #         self.exploitation_buffer.iters.append(iter)
-            #     else:
-            #         self.exploitation_buffer.states.append(state[i])
-            #         self.exploitation_buffer.actions.append(action[i])
-            #         self.exploitation_buffer.logprobs.append(action_logprob[i])
-            # populating the buffer without for loop
-            self.exploration_buffer.states.append(state[exploration_agents_idx])
-            self.exploration_buffer.actions.append(action[exploration_agents_idx])
-            self.exploration_buffer.logprobs.append(action_logprob[exploration_agents_idx])
-            self.exploration_buffer.iters.append(iter)
-            
-
+            for i in range(action.shape[0]):
+                if i in exploration_agents_idx:
+                    self.exploration_buffer.states.append(state[i])
+                    self.exploration_buffer.actions.append(action[i])
+                    self.exploration_buffer.logprobs.append(action_logprob[i])
+                    self.exploration_buffer.iters.append(iter)
+                    self.exploration_buffer.std_obs.append(std_obs)
+                else:
+                    self.exploitation_buffer.states.append(state[i])
+                    self.exploitation_buffer.actions.append(action[i])
+                    self.exploitation_buffer.logprobs.append(action_logprob[i])
+                    self.exploitation_buffer.iters.append(iter)
+                    self.exploitation_buffer.std_obs.append(std_obs)
         else:
             state = torch.FloatTensor(state).to(self.device)
             action, action_logprob = self.policy.act(state, std_obs, iter)
 
-        return action, action_logprob
+            for i in range(action.shape[0]):
+                self.buffer.states.append(state[i])
+                self.buffer.actions.append(action[i])
+                self.buffer.logprobs.append(action_logprob[i])
+                self.buffer.iters.append(iter)
 
+        return action.detach().cpu().numpy().flatten()
+
+    def __get_buffer_info(self, buffer):
+        # Monte Carlo estimate of state rewards:
+        rewards = []
+        discounted_reward = 0
+        for reward, is_terminal in zip(reversed(buffer.rewards), reversed(buffer.is_terminals)):
+            if is_terminal:
+                discounted_reward = 0
+            discounted_reward = reward + (self.gamma * discounted_reward)
+            rewards.insert(0, discounted_reward)
+
+        # Normalizing the rewards:
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+        old_states = torch.stack(buffer.states).to(self.device).detach()
+        old_actions = torch.stack(buffer.actions).to(self.device).detach()
+        old_logprobs = torch.stack(buffer.logprobs).to(self.device).detach()
+        old_iters = torch.stack(buffer.iters).to(self.device).detach()
+        old_std_obs = torch.stack(buffer.std_obs).to(self.device).detach()
+
+        return rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs
+
+
+    def __update_old_policy(self, policy, old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, buffer):
+        # Optimize policy for K epochs:
+        for _ in range(self.K_epochs):
+            # Evaluating old actions and values :
+            logprobs, state_values, dist_entropy = policy.evaluate(old_states, old_actions, old_iters, old_std_obs)
+
+            # Finding the ratio (pi_theta / pi_theta__old):
+            ratios = torch.exp(logprobs - old_logprobs.detach())
+
+            # Finding Surrogate Loss:
+            advantages = rewards - state_values.detach()
+            surr1 = ratios * advantages
+            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
+            loss = -torch.min(surr1, surr2) + 0.5 * self.MSE_loss(state_values, rewards) - 0.001*dist_entropy
+
+            # take gradient step
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
+        
+        # Copy new weights into old policy:
+        old_policy.load_state_dict(policy.state_dict())
+        # clear buffer
+        buffer.clear()
+
+    def update(self):
+        if self.split_agent:
+            # update exploration policy
+            rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.exploration_buffer)
+            self.__update_old_policy(self.exploration_policy, self.exploration_old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.exploration_buffer)
+
+            # update exploitation policy
+            rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.exploitation_buffer)
+            self.__update_old_policy(self.exploitation_policy, self.exploitation_old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.exploitation_buffer)
+
+        else:
+            rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.buffer)
+            self.__update_old_policy(self.policy, self.old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.buffer)
+
+    def save(self, filename):
+        if self.split_agent:
+            torch.save(self.exploration_policy.state_dict(), filename + "_exploration" + ".pth")
+            torch.save(self.exploitation_policy.state_dict(), filename + "_exploitation"  + ".pth")
+            print("Saved exploration policy to: ", filename + "_exploration")
+            print("Saved exploitation policy to: ", filename + "_exploitation")
+        else:
+            torch.save(self.policy.state_dict(), filename + ".pth")
+            print("Saved policy to: ", filename)
+
+    def load(self, filename):
+        if self.split_agent:
+            self.exploration_policy.load_state_dict(torch.load(filename + "_exploration" + ".pth"))
+            self.exploitation_policy.load_state_dict(torch.load(filename + "_exploitation" + ".pth"))
+            print("Loaded exploration policy from: ", filename + "_exploration")
+            print("Loaded exploitation policy from: ", filename + "_exploitation")
+        else:
+            self.policy.load_state_dict(torch.load(filename + ".pth"))
+            print("Loaded policy from: ", filename) 

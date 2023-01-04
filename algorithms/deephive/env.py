@@ -233,12 +233,7 @@ class OptEnv(gym.Env):
         # close the environment
         pass
 
-    
-
-
-
 if __name__ == "__main__":
-
     n_agents = 6
     n_dim = 2
     bounds = [(0, 0), (1,1)] 
