@@ -7,12 +7,12 @@ import numpy as np
 import random
 import math
 from typing import Callable, List, Tuple
-from environment import OptEnv, OptEnvCache
-from mappo import MAPPO
+from algorithm.opt_env import OptEnv, OptEnvCache
+from algorithm.mappo import MAPPO
 import os
 from argparse import ArgumentParser
 import yaml
-from optimization_functions import *
+from algorithm.optimization_functions import *
 
 def get_args():
     """
@@ -50,6 +50,7 @@ def prepare_environment(config:dict) -> OptEnvCache:
     :param config: The config.
     :return: The environment.
     """
+    envs_cache = OptEnvCache()
     # prepare each environment as specified in the config file and cache them
     env_config = config['environment_config']
     for i in range(len(env_config['env_list'])):
@@ -63,9 +64,9 @@ def prepare_environment(config:dict) -> OptEnvCache:
                     bounds, env_config['ep_length'], env_config['minimize'], env_config['freeze']
                     )
         # cache the environment
-        OptEnvCache.add_env(env)
+        envs_cache.add_env(func_name, env)
     # return the environment
-    return OptEnvCache
+    return envs_cache
 
 def main():
     pass

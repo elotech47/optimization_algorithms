@@ -2,13 +2,13 @@
 Unit tests for the deephive package.
 1. First test coverage is the environment is set up correctly.
 """
-
 import unittest
 import numpy as np
 import os
 import sys
 import time
-from algorithms.deephive.environment import OptEnv
+from algorithm.deephive import *
+from algorithm.opt_env import OptEnv
 
 
 class TestOptEnv(unittest.TestCase):

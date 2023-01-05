@@ -14,11 +14,13 @@ import gym
 import numpy as np
 from typing import Callable, List, Tuple, Optional
 import matplotlib.pyplot as plt
+import pickle
 
 class OptEnv(gym.Env):
-    def __init__(self, optFunc:Callable, n_agents:int, n_dim:int, bounds, ep_length:int, minimize=False, freeze=False, init_state=None, opt_bound=0.9, reward_type=0, fraq_refinement=0.5)->None:
+    def __init__(self, env_name, optFunc:Callable, n_agents:int, n_dim:int, bounds, ep_length=20, minimize=False, freeze=True, init_state=None, fraq_refinement=0.5)->None:
         """
         Args:
+            env_name: the name of the environment
             optFunc: the function to be optimized
             n_agents: number of agents
             n_dim: number of dimensions 
@@ -33,6 +35,8 @@ class OptEnv(gym.Env):
             
             **kwargs: other arguments
         """
+        super(OptEnv, self).__init__()
+        self.env_name = env_name
         self.optFunc = optFunc
         self.n_agents = n_agents
         self.n_dim = n_dim
@@ -40,8 +44,6 @@ class OptEnv(gym.Env):
         self.max_pos = np.array(bounds[1])
         self.ep_length = ep_length
         self.init_state = init_state 
-        self.opt_bound = opt_bound
-        self.reward_type = reward_type
         self.freeze = freeze
         self.refinement_idx = []
         self.fraq_refinement = fraq_refinement
@@ -233,6 +235,50 @@ class OptEnv(gym.Env):
         # close the environment
         pass
 
+# create a class to cache different environments for different objective functions
+class OptEnvCache:
+    def __init__(self):
+        self.envs = {}
+
+    def get_env(self, env_name):
+        if env_name in self.envs:
+            return self.envs[env_name]
+        else:
+            raise ValueError("Environment not found")
+    
+    def add_env(self, env_name, env):
+        # check if environment is valid
+        if not isinstance(env, OptEnv):
+            raise ValueError("Environment is not valid")
+        # check if the environment already exists
+        if env_name in self.envs:
+            raise ValueError("Environment already exists")
+        else:
+            self.envs[env_name] = env
+
+    def remove_env(self, env_name):
+        if env_name in self.envs:
+            del self.envs[env_name]
+        else:
+            raise ValueError("Environment not found")
+
+    def get_env_names(self):
+        return self.envs.keys()
+
+    def get_envs(self):
+        return self.envs.values()
+
+    def num_envs(self):
+        return len(self.envs)
+
+    def clear(self):
+        self.envs = {}
+    
+    def save_envs(self, file_path):
+        with open(file_path, 'wb') as f:
+            pickle.dump(self.envs, f)
+    
+
 if __name__ == "__main__":
     n_agents = 6
     n_dim = 2
@@ -248,4 +294,3 @@ if __name__ == "__main__":
         print(env.step(np.random.uniform(low=-1, high=1, size=(6, 2))))
         env.render()
         plt.close()
-
