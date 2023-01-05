@@ -1,0 +1,38 @@
+environment_config:
+  n_agents: 10
+  n_dim: 2
+  ep_length: 20
+  minimize: False
+  freeze: True
+  fraq_refinement: 0.5
+  env_list: [sphere, rosenbrock, cosine_mixture, ghabit, cos_function, ackley, rastrigin, griewank, bohachevsky, booth, three_hump_camel, easom, six_hump_camel]
+  bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
+
+
+mappo_config:
+  lr: 0.00001
+  gamma: 0.9
+  beta: 0.999
+  K_epoch: 32
+  esp_clip: 0.2
+  init_std: 0.2
+  min_std: 0.001
+  max_std: 0.2
+  std_type: linear_decay
+  learn_std: False
+  action_dim: 1
+  mode: train
+  initialization: None
+  hidden_unit: [32,32,32]
+
+environment:
+  max_episodes: 50000
+  change_env: 5
+  update_timestep: 200
+  save_freq: 500
+  log_freq: 500
+  std_type: euclidean
+  ep_length: 100
+  print_freq: 500
+  save_cutoff: 100
+  transition_episode: 1000
