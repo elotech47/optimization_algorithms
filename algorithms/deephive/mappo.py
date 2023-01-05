@@ -57,21 +57,19 @@ class ActorCritic(nn.Module):
                 init_std=0.02, std_min=0.001, std_max=0.2, std_type='linear', fixed_std=True):
         super(ActorCritic, self).__init__()
 
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim[0]),
-            nn.Tanh(),
-            nn.Linear(hidden_dim[0], hidden_dim[1]),
-            nn.Tanh(),
-            nn.Linear(hidden_dim[1], action_dim),
-        )
-
-        self.critic = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim[0]),
-            nn.Tanh(),
-            nn.Linear(hidden_dim[0], hidden_dim[1]),
-            nn.Tanh(),
-            nn.Linear(hidden_dim[1], 1)
-        )
+        self.actor = nn.Sequential()
+        self.critic = nn.Sequential()
+        for i in range(len(hidden_dim)):
+            if i == 0:
+                self.actor.add_module('actor_fc_{}'.format(i), nn.Linear(state_dim, hidden_dim[i]))
+                self.critic.add_module('critic_fc_{}'.format(i), nn.Linear(state_dim, hidden_dim[i]))
+            else:
+                self.actor.add_module('actor_fc_{}'.format(i), nn.Linear(hidden_dim[i-1], hidden_dim[i]))
+                self.critic.add_module('critic_fc_{}'.format(i), nn.Linear(hidden_dim[i-1], hidden_dim[i]))
+            # last layer is linear with no activation
+            if i == len(hidden_dim) - 1:
+                self.actor.add_module('actor_fc_{}'.format(i+1), nn.Linear(hidden_dim[i], action_dim))
+                self.critic.add_module('critic_fc_{}'.format(i+1), nn.Linear(hidden_dim[i], 1))
 
         self.action_dim = action_dim
         self.std_min = std_min
@@ -105,7 +103,7 @@ class ActorCritic(nn.Module):
 
 ## Create a class for the MAPPO agent
 class MAPPO: 
-    def __init__(self, n_agents, n_dim, state_dim, action_dim, episode_length,  
+    def __init__(self,  state_dim, action_dim, episode_length,  
                         init_std = 0.2, std_min=0.001, std_max=0.2, std_type='linear', 
                         fixed_std=True, hidden_dim=[32,32], lr=1e-5, betas=0.99, gamma=0.9, 
                         K_epochs=32, eps_clip=0.2, initialization=None,pretrained=False, 
