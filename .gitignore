@@ -36,6 +36,7 @@ MANIFEST
 # My stuff
 note.md 
 exp.ipynb
+exp copy.ipynb
 
 # Installer logs
 pip-log.txt
