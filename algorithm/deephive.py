@@ -68,6 +68,24 @@ def prepare_environment(config:dict) -> OptEnvCache:
     # return the environment
     return envs_cache
 
+def initialize_policy(config:dict, ep_length:int) -> MAPPO:
+    """
+    Initialize the policy.
+    :param config: The config.
+    :return: The policy.
+    """
+    # get the policy config
+    policy_config = config['policy_config']
+    # create the policy
+    policy = MAPPO(policy_config['state_dim'], policy_config['action_dim'],ep_length,policy_config['init_std'],
+                    policy_config['std_min'], policy_config['std_max'], policy_config['std_type'], policy_config['fixed_std'],
+                    policy_config['hidden_dim'], policy_config['lr'], policy_config['betas'], policy_config['gamma'],
+                    policy_config['K_epochs'], policy_config['eps_clip'], policy_config['initialization'],
+                    policy_config['pretrained'], policy_config['ckpt_path'],policy_config['split_agent'],
+                     policy_config['split_fraq'], policy_config['explore_state_dim'],policy_config['exploit_state_dim'])
+    # return the policy
+    return policy
+
 def main():
     pass
 
