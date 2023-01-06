@@ -9,21 +9,29 @@ environment_config:
   bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
 
 
-mappo_config:
+policy_config:
+  state_dim: 3
+  action_dim: 1
+  init_std: 0.2
+  std_min: 0.001
+  std_max: 0.2
+  std_type: linear
+  fixed_std: False
+  hidden_dim: [32,32,32]
+  episode_length: 20
+  betas: 0.999
   lr: 0.00001
   gamma: 0.9
-  beta: 0.999
-  K_epoch: 32
-  esp_clip: 0.2
-  init_std: 0.2
-  min_std: 0.001
-  max_std: 0.2
-  std_type: linear_decay
-  learn_std: False
-  action_dim: 1
-  mode: train
-  initialization: None
-  hidden_unit: [32,32,32]
+  K_epochs: 32
+  eps_clip: 0.2
+  initialization: 
+  pretrained: False
+  ckpt_path: 
+  split_agent: True
+  split_fraq: 0.5
+  explore_state_dim: 3
+  exploit_state_dim: 3
+  
 
 environment:
   max_episodes: 50000
