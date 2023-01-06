@@ -4,7 +4,7 @@ import numpy as np
 import time
 import torch 
 import torch.nn as nn
-from torch.distributions import Categorical, MultivariateNormal, Normal
+from torch.distributions import Categorical, MultivariateNormal, normal
 import math
 from datetime import datetime
 
@@ -39,15 +39,21 @@ class StdDecay:
         self.std_max = std_max
         self.std_type = std_type
         self.fixed_std = fixed_std
+    
+    def linear_decay(self, dist):
+            return self.std_min + (self.std_max - self.std_min) * dist
+
+    def exponential_decay(self, dist):
+        return self.std_min + (self.std_max - self.std_min) * np.exp(-dist)
 
     def get_std(self, dist, iter, max_iter):
         if self.fixed_std:
-            return self.init_std
+            return torch.full((1,), self.init_std * self.init_std).to(device)
         else:
             if self.std_type == 'linear':
-                return max(self.std_min, self.std_max - (self.std_max - self.std_min) * iter / max_iter) * dist
+                return torch.from_numpy(self.linear_decay(dist)).to(device)
             elif self.std_type == 'exponential':
-                return max(self.std_min, self.std_max * (self.std_min / self.std_max) ** (iter / max_iter)) * dist
+                return torch.from_numpy(self.exponential_decay(dist)).to(device)
             else:
                 raise NotImplementedError
 
@@ -86,16 +92,21 @@ class ActorCritic(nn.Module):
 
     def act(self, state, std_obs, iter):
         action_mean = self.actor(state)
+        # reshape action mean to be compatible with action_var
         action_var = self.std.get_std(std_obs, iter, self.episode_length)
-        dist = Normal(action_mean, action_var)
+        if self.action_dim == 1:
+            action_mean = action_mean.reshape(action_var.shape)
+        dist = normal.Normal(action_mean, action_var)
         action = dist.sample()
         action_logprob = dist.log_prob(action)
-        return action.detach(), action_logprob
+        return action.detach(), action_logprob.detach()
 
     def evaluate(self, state, action, std_obs, iter):
+        if self.action_dim == 1:
+            action = action.reshape(-1, self.action_dim)
         action_mean = self.actor(state)
         action_var = self.std.get_std(std_obs, iter, self.episode_length)
-        dist = Normal(action_mean, action_var)
+        dist = normal.Normal(action_mean, action_var)
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
         state_value = self.critic(state)
@@ -103,11 +114,12 @@ class ActorCritic(nn.Module):
 
 ## Create a class for the MAPPO agent
 class MAPPO: 
-    def __init__(self,  state_dim, action_dim, episode_length,  
+    def __init__(self, state_dim, action_dim, episode_length,  
                         init_std = 0.2, std_min=0.001, std_max=0.2, std_type='linear', 
                         fixed_std=True, hidden_dim=[32,32], lr=1e-5, betas=0.99, gamma=0.9, 
                         K_epochs=32, eps_clip=0.2, initialization=None,pretrained=False, 
-                        ckpt_path=None, device=device, split_agent=False, split_fraq=0.5):
+                        ckpt_path=None, split_agent=False, split_fraq=0.5,
+                        explore_state_dim=None, exploit_state_dim=None,device=device):
         
         self.lr = lr
         self.betas = betas
@@ -120,25 +132,26 @@ class MAPPO:
         self.ckpt_path = ckpt_path
         self.initialization = initialization
         self.split_agent = split_agent
+        self.action_dim = action_dim
         if self.split_agent:
             self.exploration_buffer = Memory()
             self.exploitation_buffer = Memory()
         else:
             self.buffer = Memory()
-
+        
         # create two actor-critic networks if split_agent is True (one for exploration and one for exploitation)
         # state_dim would reduce by split_fraq if split_agent is True and also n_agents would reduce by split_fraq
 
         if self.split_agent:
             # exploration Policy
-            self.exploration_policy = ActorCritic(state_dim, action_dim, 
+            self.exploration_policy = ActorCritic(explore_state_dim, action_dim, 
                                                 hidden_dim, self.episode_length,
                                                 init_std=init_std, std_min =std_min, 
                                                 std_max=std_max, std_type=std_type, 
                                                 fixed_std=fixed_std).to(self.device)
             
             # exploitation Policy
-            self.exploitation_policy = ActorCritic(state_dim, action_dim, 
+            self.exploitation_policy = ActorCritic(exploit_state_dim, action_dim, 
                                                 hidden_dim, self.episode_length,
                                                 init_std=init_std, std_min =std_min, 
                                                 std_max=std_max, std_type=std_type, 
@@ -184,21 +197,29 @@ class MAPPO:
         self.MSE_loss = nn.MSELoss()
 
     def select_action(self, state, std_obs, iter, exploration_agents_idx=[]):
+        action = torch.zeros(state.shape[0], self.action_dim).to(self.device)
+        action_logprob = torch.zeros(state.shape[0], self.action_dim).to(self.device)
+        # set action_logprob type to double
+        action_logprob = action_logprob.double()
         if self.split_agent:
             # select action for exploration agents
             exploration_state = state[exploration_agents_idx]
+            exploration_std_obs = std_obs[exploration_agents_idx]
             exploration_state = torch.FloatTensor(exploration_state).to(self.device)
-            exploration_action, exploration_action_logprob = self.exploration_policy.act(exploration_state, std_obs, iter)
+            exploration_action, exploration_action_logprob = self.exploration_policy.act(exploration_state, exploration_std_obs, iter)
 
             # select action for exploitation agents
             exploitation_state = state[ ~exploration_agents_idx]
+            exploitation_std_obs = std_obs[~exploration_agents_idx]
             exploitation_state = torch.FloatTensor(exploitation_state).to(self.device)
-            exploitation_action, exploitation_action_logprob = self.exploitation_policy.act(exploitation_state, std_obs, iter)
-
-            # concatenate the actions
-            action = torch.cat((exploration_action, exploitation_action), dim=1)
-            action_logprob = torch.cat((exploration_action_logprob, exploitation_action_logprob), dim=1)
-
+            exploitation_action, exploitation_action_logprob = self.exploitation_policy.act(exploitation_state, exploitation_std_obs, iter)
+            # concatenate the actions and logprobs based on exploration_agents_idx
+            action[exploration_agents_idx] = exploration_action.reshape(-1, self.action_dim)
+            action[np.logical_not(np.isin(range(len(action)), exploration_agents_idx))] = exploitation_action.reshape(-1, self.action_dim)
+            # set action_logprob type to that of exploration_action_logprob
+            action_logprob[exploration_agents_idx] = exploration_action_logprob.reshape(-1, self.action_dim)
+            action_logprob[np.logical_not(np.isin(range(len(action)), exploration_agents_idx))] = exploitation_action_logprob.reshape(-1, self.action_dim)
+            
             for i in range(action.shape[0]):
                 if i in exploration_agents_idx:
                     self.exploration_buffer.states.append(state[i])
