@@ -1,12 +1,8 @@
 """ MAPPO : Multi-Agent Proximal Policy Optimization for DeepHive. """
-import os
 import numpy as np
-import time
 import torch 
 import torch.nn as nn
-from torch.distributions import Categorical, MultivariateNormal, normal
-import math
-from datetime import datetime
+from torch.distributions import normal
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 random_seed = 42
@@ -196,43 +192,42 @@ class MAPPO:
 
         self.MSE_loss = nn.MSELoss()
 
-    def select_action(self, state, std_obs, iter, exploration_agents_idx=[]):
+    def select_action(self, state:np.array, std_obs:np.array, iter:int, exploitation_agents_idx=[]):
         action = torch.zeros(state.shape[0], self.action_dim).to(self.device)
         action_logprob = torch.zeros(state.shape[0], self.action_dim).to(self.device)
         # set action_logprob type to double
         action_logprob = action_logprob.double()
         if self.split_agent:
             # select action for exploration agents
-            exploration_state = state[exploration_agents_idx]
-            exploration_std_obs = std_obs[exploration_agents_idx]
+            exploration_state = state[~exploitation_agents_idx]
+            exploration_std_obs = std_obs[~exploitation_agents_idx]
             exploration_state = torch.FloatTensor(exploration_state).to(self.device)
             exploration_action, exploration_action_logprob = self.exploration_policy.act(exploration_state, exploration_std_obs, iter)
 
             # select action for exploitation agents
-            exploitation_state = state[ ~exploration_agents_idx]
-            exploitation_std_obs = std_obs[~exploration_agents_idx]
+            exploitation_state = state[exploitation_agents_idx]
+            exploitation_std_obs = std_obs[exploitation_agents_idx]
             exploitation_state = torch.FloatTensor(exploitation_state).to(self.device)
             exploitation_action, exploitation_action_logprob = self.exploitation_policy.act(exploitation_state, exploitation_std_obs, iter)
             # concatenate the actions and logprobs based on exploration_agents_idx
-            action[exploration_agents_idx] = exploration_action.reshape(-1, self.action_dim)
-            action[np.logical_not(np.isin(range(len(action)), exploration_agents_idx))] = exploitation_action.reshape(-1, self.action_dim)
+            action[exploitation_agents_idx] = exploitation_action.reshape(-1, self.action_dim)
+            action[np.logical_not(np.isin(range(len(action)), exploitation_agents_idx))] = exploration_action.reshape(-1, self.action_dim)
             # set action_logprob type to that of exploration_action_logprob
-            action_logprob[exploration_agents_idx] = exploration_action_logprob.reshape(-1, self.action_dim)
-            action_logprob[np.logical_not(np.isin(range(len(action)), exploration_agents_idx))] = exploitation_action_logprob.reshape(-1, self.action_dim)
+            action_logprob[exploitation_agents_idx] = exploitation_action_logprob.reshape(-1, self.action_dim)
+            action_logprob[np.logical_not(np.isin(range(len(action)), exploitation_agents_idx))] = exploration_action_logprob.reshape(-1, self.action_dim)
             
-            for i in range(action.shape[0]):
-                if i in exploration_agents_idx:
-                    self.exploration_buffer.states.append(state[i])
-                    self.exploration_buffer.actions.append(action[i])
-                    self.exploration_buffer.logprobs.append(action_logprob[i])
-                    self.exploration_buffer.iters.append(iter)
-                    self.exploration_buffer.std_obs.append(std_obs)
-                else:
-                    self.exploitation_buffer.states.append(state[i])
-                    self.exploitation_buffer.actions.append(action[i])
-                    self.exploitation_buffer.logprobs.append(action_logprob[i])
-                    self.exploitation_buffer.iters.append(iter)
-                    self.exploitation_buffer.std_obs.append(std_obs)
+            for i in range(exploitation_action.shape[0]):
+                self.exploitation_buffer.states.append(exploitation_state[i])
+                self.exploitation_buffer.actions.append(exploitation_action[i])
+                self.exploitation_buffer.logprobs.append(exploitation_action_logprob[i])
+                self.exploitation_buffer.iters.append(iter)
+                self.exploitation_buffer.std_obs.append(exploration_std_obs[i])
+            for i in range(exploration_action.shape[0]):
+                self.exploration_buffer.states.append(exploration_state[i])
+                self.exploration_buffer.actions.append(exploration_action[i])
+                self.exploration_buffer.logprobs.append(exploration_action_logprob[i])
+                self.exploration_buffer.iters.append(iter)
+                self.exploration_buffer.std_obs.append(exploitation_std_obs[i])
         else:
             state = torch.FloatTensor(state).to(self.device)
             action, action_logprob = self.policy.act(state, std_obs, iter)
@@ -244,6 +239,8 @@ class MAPPO:
                 self.buffer.iters.append(iter)
 
         return action.detach().cpu().numpy().flatten()
+
+        
 
     def __get_buffer_info(self, buffer):
         # Monte Carlo estimate of state rewards:
@@ -261,13 +258,13 @@ class MAPPO:
         old_states = torch.stack(buffer.states).to(self.device).detach()
         old_actions = torch.stack(buffer.actions).to(self.device).detach()
         old_logprobs = torch.stack(buffer.logprobs).to(self.device).detach()
-        old_iters = torch.stack(buffer.iters).to(self.device).detach()
-        old_std_obs = torch.stack(buffer.std_obs).to(self.device).detach()
+        old_iters = np.stack(buffer.iters)
+        old_std_obs = np.stack(buffer.std_obs)
 
         return rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs
 
 
-    def __update_old_policy(self, policy, old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, buffer):
+    def __update_old_policy(self, policy, old_policy, optimizer, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs):
         # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
             # Evaluating old actions and values :
@@ -283,29 +280,28 @@ class MAPPO:
             loss = -torch.min(surr1, surr2) + 0.5 * self.MSE_loss(state_values, rewards) - 0.001*dist_entropy
 
             # take gradient step
-            self.optimizer.zero_grad()
+            optimizer.zero_grad()
             loss.mean().backward()
-            self.optimizer.step()
+            optimizer.step()
         
         # Copy new weights into old policy:
         old_policy.load_state_dict(policy.state_dict())
-        # clear buffer
-        buffer.clear()
+    
 
     def update(self):
         if self.split_agent:
             # update exploration policy
             rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.exploration_buffer)
-            self.__update_old_policy(self.exploration_policy, self.exploration_old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.exploration_buffer)
-
+            self.__update_old_policy(self.exploration_policy, self.exploration_old_policy, self.exploration_optimizer, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs)
+            self.exploration_buffer.clear_memory()
             # update exploitation policy
             rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.exploitation_buffer)
-            self.__update_old_policy(self.exploitation_policy, self.exploitation_old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.exploitation_buffer)
-
+            self.__update_old_policy(self.exploitation_policy, self.exploitation_old_policy, self.exploitation_optimizer, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs)
+            self.exploitation_buffer.clear_memory()
         else:
             rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.buffer)
-            self.__update_old_policy(self.policy, self.old_policy, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs, self.buffer)
-
+            self.__update_old_policy(self.policy, self.old_policy, self.optimizer, rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs)
+            self.buffer.clear_memory()
     def save(self, filename):
         if self.split_agent:
             torch.save(self.exploration_policy.state_dict(), filename + "_exploration" + ".pth")
