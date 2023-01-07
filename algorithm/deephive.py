@@ -7,12 +7,15 @@ import numpy as np
 import random
 import math
 from typing import Callable, List, Tuple
-from algorithm.opt_env import OptEnv, OptEnvCache
-from algorithm.mappo import MAPPO
+from opt_env import OptEnv, OptEnvCache
+from mappo import MAPPO
 import os
 from argparse import ArgumentParser
 import yaml
-from algorithm.optimization_functions import *
+from optimization_functions import *
+import imageio
+import re
+import matplotlib.pyplot as plt
 
 def get_args():
     """
@@ -23,6 +26,7 @@ def get_args():
     parser = ArgumentParser()
     # add the arguments
     parser.add_argument('-c', '--config', type=str, default='config.yaml', help='The path to the config file.')
+    parser.add_argument('-m', '--mode', type=str, default='train', help='The mode of the algorithm. (train, test, plot)')
     # parse the arguments
     args = parser.parse_args()
     # return the arguments
@@ -68,7 +72,7 @@ def prepare_environment(config:dict) -> OptEnvCache:
     # return the environment
     return envs_cache
 
-def initialize_policy(config:dict, ep_length:int) -> MAPPO:
+def initialize_policy(config:dict) -> MAPPO:
     """
     Initialize the policy.
     :param config: The config.
@@ -77,7 +81,7 @@ def initialize_policy(config:dict, ep_length:int) -> MAPPO:
     # get the policy config
     policy_config = config['policy_config']
     # create the policy
-    policy = MAPPO(policy_config['state_dim'], policy_config['action_dim'],ep_length,policy_config['init_std'],
+    policy = MAPPO(policy_config['state_dim'], policy_config['action_dim'],config['environment_config']['ep_length'],policy_config['init_std'],
                     policy_config['std_min'], policy_config['std_max'], policy_config['std_type'], policy_config['fixed_std'],
                     policy_config['hidden_dim'], policy_config['lr'], policy_config['betas'], policy_config['gamma'],
                     policy_config['K_epochs'], policy_config['eps_clip'], policy_config['initialization'],
@@ -208,6 +212,51 @@ def generate_observations(env: OptEnv, split=False) -> np.ndarray:
     return observation, std_observation
 
 
+def animate(env:OptEnv, env_id, config:dict):
+    plot_directory = config['environment_config']['plot_directory']
+    env_name = env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
+    title = env_name + ".gif"
+    opt_func_name = config['environment_config']['env_list'][env_id]
+    ep_length = env.ep_length
+    fps = config['environment_config']['fps']
+    count = 0
+    agents_pos = env.stateHistory
+    markers = ['o','v','s','p','P','*','h','H','+','x','X','D','d','|','_']
+    while True:
+        fig = plt.figure(figsize=(15, 10))
+        ax = fig.add_subplot()
+        fig.subplots_adjust(top=0.85)
+        plt.clf()
+        X =  Y = np.linspace(env.min_pos, env.max_pos, 101)
+        x, y = np.meshgrid(X, Y)
+        Z = env.optFunc(np.array([x, y]), plotable=True)
+        plt.contour(x, y, Z, 20)
+        plt.colorbar()
+        for i in range(env.n_agents):
+            pos = agents_pos[count][i]
+            plt.plot(pos[0], pos[1] ,marker=markers[0], markersize=15, markerfacecolor='r')
+            plt.text(env.max_pos[0], env.max_pos[0], f"Step {count+1}", style='italic',
+            bbox={'facecolor': 'blue', 'alpha': 0.5, 'pad': 10})
+        #plt.pause(0.5)
+        plt.title(opt_func_name)
+        plt_dir = plot_directory + f"{count}.png"  
+        print(plt_dir)
+        plt.savefig(plt_dir) 
+        plt.close(fig)
+        plt.show()
+        count += 1
+        if count >= ep_length:
+            break
+    images = []
+    filenames = os.listdir(plot_directory)
+    filenames.sort(key=lambda f: int(re.sub('\D', '', f)))
+    for filename in filenames:
+        images.append(imageio.imread(plot_directory + filename))
+    imageio.mimsave(title, images, fps=fps)
+    for filename in set(filenames):
+        os.remove(plot_directory + filename)
+
+
 def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
     """
     Train the policy.
@@ -215,10 +264,90 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
     :param envs: The environment.
     :param policy: The policy.
     """
-    max_episode = config['environment']['max_episode']
-    episode_length = config['episode_length']
+    max_episode = config['environment_config']['max_episode']
     env_id = 0
-    for episode in max_episode:
-        env_name = config['environment_config']['env_list'][env_id] +
+    for episode in range(max_episode):
+        env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
+        env = envs.get_env(env_name)
+        states = env.reset()
+        for step in range(env.ep_length):
+            # get observations and std_obs
+            obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
+            # get actions
+            agent_actions = []
+            for dim in range(env.n_dim):
+                action = policy.select_action(obs[dim], std_obs[dim], step, env.refinement_idx)
+                agent_actions.append(action)
 
+            actions = np.transpose(np.array(agent_actions))
+            # step the environment
+            next_states, rewards, dones, _ = env.step(actions)
+            ## add reward to the buffer
+            for agent in range(env.n_agents):
+                if policy.split_agent:
+                    if agent in env.refinement_idx:
+                        policy.exploitation_buffer.rewards += [rewards[agent]]*env.n_dim
+                        policy.exploitation_buffer.is_terminals += [dones[agent]]*env.n_dim
+                        policy.exploration_buffer.rewards += [rewards[agent]]*env.n_dim
+                        policy.exploration_buffer.is_terminals += [dones[agent]]*env.n_dim
+                else:
+                    policy.buffer.rewards += [rewards[agent]] * env.n_dim
+                    policy.buffer.is_terminals += [dones[agent]] * env.n_dim
+                
+        # update the policy
+        if episode % config['policy_config']['update_interval'] == 0:
+            policy.update()
+        # save the model
+        if episode % config['policy_config']['save_interval'] == 0:
+            model_path = "models/" + config['policy_config']['model_path'] + f"_{episode}"
+            policy.save(model_path)
+            
 
+def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
+    """
+    Test the policy.
+    :param config: The configuration.
+    :param envs: The environment.
+    :param policy: The policy.
+    """
+    env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
+    env = envs.get_env(env_name)
+    states = env.reset()
+    for step in range(env.ep_length):
+        # get observations and std_obs
+        obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
+        # get actions
+        agent_actions = []
+        for dim in range(env.n_dim):
+            action = policy.select_action(obs[dim], std_obs[dim], step, env.refinement_idx)
+            agent_actions.append(action)
+
+        actions = np.transpose(np.array(agent_actions))
+        # step the environment
+        next_states, rewards, dones, _ = env.step(actions)
+
+        # create animation
+        
+    animate(env, env_id, config)
+
+def main():
+    # load the configuration
+    args = get_args()
+    config_path = args.config
+    mode = args.mode
+    config = get_config(config_path)
+    # create the environment
+    envs = prepare_environment(config)
+    # create the policy
+    policy = initialize_policy(config)
+    # train the policy
+    if mode == "train": 
+        train_policy(config, envs, policy)
+    # test the policy
+    elif mode == "test":
+        test_policy(config, envs, policy, 0)
+    else:
+        raise ValueError("Unknown mode")
+
+if __name__ == "__main__":
+    main()
