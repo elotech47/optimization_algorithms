@@ -7,10 +7,12 @@ environment_config:
   fraq_refinement: 0.5
   env_list: [sphere, rosenbrock, cosine_mixture, ghabit, cos_function, ackley, rastrigin, griewank, bohachevsky, booth, three_hump_camel, easom, six_hump_camel]
   bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
+  max_episode: 5000
+
 
 
 policy_config:
-  state_dim: 3
+  state_dim: 4
   action_dim: 1
   init_std: 0.2
   std_min: 0.001
@@ -29,8 +31,11 @@ policy_config:
   ckpt_path: 
   split_agent: True
   split_fraq: 0.5
-  explore_state_dim: 3
-  exploit_state_dim: 3
+  explore_state_dim: 4
+  exploit_state_dim: 4
+  update_interval: 10
+  save_interval: 1000
+  model_path: models
   
 
 environment:
