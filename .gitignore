@@ -37,6 +37,11 @@ MANIFEST
 note.md 
 exp.ipynb
 exp copy.ipynb
+models/
+*.pth 
+plots/
+*.gif
+
 
 # Installer logs
 pip-log.txt
