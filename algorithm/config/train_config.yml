@@ -7,7 +7,9 @@ environment_config:
   fraq_refinement: 0.5
   env_list: [sphere, rosenbrock, cosine_mixture, ghabit, cos_function, ackley, rastrigin, griewank, bohachevsky, booth, three_hump_camel, easom, six_hump_camel]
   bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
-  max_episode: 5000
+  max_episode: 50
+  plot_directory: plots/
+  fps: 2
 
 
 
@@ -34,7 +36,7 @@ policy_config:
   explore_state_dim: 4
   exploit_state_dim: 4
   update_interval: 10
-  save_interval: 1000
+  save_interval: 100
   model_path: models
   
 
