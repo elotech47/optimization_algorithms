@@ -39,3 +39,9 @@ We welcome contributions to DeepHive! If you have an idea for a feature or bug f
 
 ### License
 DeepHive is released under the MIT License.
+
+
+## TO DO
+- Color exploiting agents
+- Confirm the best agent does not change
+- write tests
