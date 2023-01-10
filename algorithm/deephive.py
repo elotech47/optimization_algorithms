@@ -27,6 +27,7 @@ def get_args():
     # add the arguments
     parser.add_argument('-c', '--config', type=str, default='config.yaml', help='The path to the config file.')
     parser.add_argument('-m', '--mode', type=str, default='train', help='The mode of the algorithm. (train, test, plot)')
+    parser.add_argument('-e', '--env', type=str, default=0, help='The environment to train/test the algorithm on.')
     # parse the arguments
     args = parser.parse_args()
     # return the arguments
@@ -60,12 +61,16 @@ def prepare_environment(config:dict) -> OptEnvCache:
     for i in range(len(env_config['env_list'])):
         # create the environment
         func_name = env_config['env_list'][i] + "_" + f"{env_config['n_dim']}D_{env_config['n_agents']}_agents"
-        obj_func, bounds = get_obj_func(env_config['env_list'][i])
+        obj_func, bounds, opt_obj_value, type = get_obj_func(env_config['env_list'][i])
+        if type == 'minimize':
+            min = True
+        else:
+            min = False
         # if n_dim is not 2D, ignore the bounds and use bounds from the config file
         if env_config['n_dim'] != 2:
             bounds = env_config['bounds'][i]
         env = OptEnv(func_name, obj_func, env_config['n_agents'], env_config['n_dim'], 
-                    bounds, env_config['ep_length'], env_config['minimize'], env_config['freeze']
+                    bounds, env_config['ep_length'], min, env_config['freeze'],opt_value=float(opt_obj_value)
                     )
         # cache the environment
         envs_cache.add_env(func_name, env)
@@ -212,10 +217,10 @@ def generate_observations(env: OptEnv, split=False) -> np.ndarray:
     return observation, std_observation
 
 
-def animate(env:OptEnv, env_id, config:dict):
+def animate(env:OptEnv, env_id, iter, config:dict):
     plot_directory = config['environment_config']['plot_directory']
     env_name = env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
-    title = env_name + ".gif"
+    title = env_name + f"_{iter}_.gif"
     opt_func_name = config['environment_config']['env_list'][env_id]
     ep_length = env.ep_length
     fps = config['environment_config']['fps']
@@ -229,18 +234,30 @@ def animate(env:OptEnv, env_id, config:dict):
         plt.clf()
         X =  Y = np.linspace(env.min_pos, env.max_pos, 101)
         x, y = np.meshgrid(X, Y)
-        Z = env.optFunc(np.array([x, y]), plotable=True)
+        Z = env.optFunc(np.array([x, y]),minimize=env.minimize, plotable=True)
         plt.contour(x, y, Z, 20)
         plt.colorbar()
         for i in range(env.n_agents):
             pos = agents_pos[count][i]
-            plt.plot(pos[0], pos[1] ,marker=markers[0], markersize=15, markerfacecolor='r')
+            if i == env.best_agent_idx:
+                plt.plot(pos[0], pos[1] ,marker=markers[1], markersize=19, markerfacecolor='b')
+            elif i in env.refinement_idx:
+                plt.plot(pos[0], pos[1] ,marker=markers[2], markersize=17, markerfacecolor='g')
+            else:
+                plt.plot(pos[0], pos[1] ,marker=markers[0], markersize=15, markerfacecolor='r')
             plt.text(env.max_pos[0], env.max_pos[0], f"Step {count+1}", style='italic',
             bbox={'facecolor': 'blue', 'alpha': 0.5, 'pad': 10})
+            # add legend
+            # set the legend such that the best agent is always the first one, the refinement agents are the second ones and the rest are the exploration agents
+            Line2D = plt.Line2D
+            legend_elements = [Line2D([0], [0], marker=markers[1], color='w', label='Best Agent', markerfacecolor='b', markersize=15),
+                               Line2D([0], [0], marker=markers[2], color='w', label='Refinement Agents', markerfacecolor='g', markersize=15),
+                               Line2D([0], [0], marker=markers[0], color='w', label='Exploration Agents', markerfacecolor='r', markersize=15)]
+            plt.legend(handles=legend_elements, loc='upper right')
         #plt.pause(0.5)
         plt.title(opt_func_name)
         plt_dir = plot_directory + f"{count}.png"  
-        print(plt_dir)
+        #print(plt_dir)
         plt.savefig(plt_dir) 
         plt.close(fig)
         plt.show()
@@ -265,11 +282,15 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
     :param policy: The policy.
     """
     max_episode = config['environment_config']['max_episode']
-    env_id = 0
+    env_ids = config['environment_config']['env_id']
+    # chose random id in list
     for episode in range(max_episode):
+        if episode % int(config['environment_config']['change_freq']) == 0:
+            env_id = random.choice(env_ids)
+            print(f"Episode {episode} of {max_episode} ({episode/max_episode*100:.2f}% ) for {config['environment_config']['env_list'][env_id]} environment")
         env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
         env = envs.get_env(env_name)
-        states = env.reset()
+        _ = env.reset()
         for step in range(env.ep_length):
             # get observations and std_obs
             obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
@@ -293,14 +314,23 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
                 else:
                     policy.buffer.rewards += [rewards[agent]] * env.n_dim
                     policy.buffer.is_terminals += [dones[agent]] * env.n_dim
+            # stop if there is more than half done in dones
+            if np.sum(dones) > env.n_agents/2:
+                print(f"More than {np.sum(dones)} agents are done in episode {episode} at step {step}")
+                break
                 
         # update the policy
         if episode % config['policy_config']['update_interval'] == 0:
             policy.update()
+            print(f"Updated the policy at episode {episode} for {config['environment_config']['env_list'][env_id]} environment")
         # save the model
         if episode % config['policy_config']['save_interval'] == 0:
             model_path = "models/" + config['policy_config']['model_path'] + f"_{episode}"
             policy.save(model_path)
+        # animate the training process
+        if episode % config['policy_config']['animate_interval'] == 0:
+            animate(env, env_id, episode, config)
+        
             
 
 def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
@@ -310,9 +340,14 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
     :param envs: The environment.
     :param policy: The policy.
     """
+
     env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
     env = envs.get_env(env_name)
     states = env.reset()
+    model_name = config['policy_config']['test_model_path']
+    # load model
+    iters = "test"
+    policy.load(model_name)
     for step in range(env.ep_length):
         # get observations and std_obs
         obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
@@ -321,20 +356,24 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
         for dim in range(env.n_dim):
             action = policy.select_action(obs[dim], std_obs[dim], step, env.refinement_idx)
             agent_actions.append(action)
-
+        # print(env.refinement_idx)
         actions = np.transpose(np.array(agent_actions))
         # step the environment
         next_states, rewards, dones, _ = env.step(actions)
-
-        # create animation
+        # stop if there is more than half done in dones
+        if np.sum(dones) > env.n_agents/3:
+            print(f"More than {np.sum(dones)} agents are done at step {step}")
+            break
         
-    animate(env, env_id, config)
+    animate(env, env_id, iters, config)
+    print(env.get_best_agent())
 
 def main():
     # load the configuration
     args = get_args()
     config_path = args.config
     mode = args.mode
+    env_id = int(args.env)
     config = get_config(config_path)
     # create the environment
     envs = prepare_environment(config)
@@ -345,7 +384,7 @@ def main():
         train_policy(config, envs, policy)
     # test the policy
     elif mode == "test":
-        test_policy(config, envs, policy, 0)
+        test_policy(config, envs, policy, env_id)
     else:
         raise ValueError("Unknown mode")
 
