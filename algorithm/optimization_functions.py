@@ -58,7 +58,7 @@ def rosenbrock(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
     # check if the fitness should be minimized
     return fitness if minimize else -fitness
 
-# cosine mixture function that takes an array of parameters and returns an array of fitness values
+# # cosine mixture function that takes an array of parameters and returns an array of fitness values
 def cosine_mixture(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
     """ The cosine mixture function.
     :param params: The parameters.
@@ -79,12 +79,17 @@ def cosine_mixture(params:np.ndarray, minimize=False, plotable=False) -> np.ndar
             raise ValueError('The parameters must be a 2D numpy array.')
         param1 = params[0, :]
         param2 = params[1, :]
-        fitness = np.square(param1) + np.square(param2) + 2 * np.cos(2 * math.pi * param1) + 2 * np.cos(2 * math.pi * param2)
+        fitness = 0.1 * (np.cos(5 * math.pi * param1) + np.cos(5 * math.pi * param2)) - (np.square(param1) + np.square(param2))
     else:
-        fitness = np.sum(np.square(params), axis=1) + 2 * np.sum(np.cos(2 * math.pi * params), axis=1)
+        fitness = 0.1 * np.sum(np.cos(5 * math.pi * params), axis=1) - np.sum(np.square(params), axis=1)
     # check if the fitness should be minimized
-    return fitness if minimize else -fitness
-    
+    return -fitness if minimize else fitness
+
+def ghabit_function_2D(X):
+    x1 = X[0,:]
+    x0 = X[1,:]
+    y = (1 - x1/2 + x1**5 + x0**3) * np.exp(-x1**2 - x0**2)
+    return -y
 
 # ghabit function that takes an array of parameters and returns an array of fitness values
 def ghabit(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
@@ -107,12 +112,17 @@ def ghabit(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
             raise ValueError('The parameters must be a 2D numpy array.')
         param1 = params[0, :]
         param2 = params[1, :]
-        fitness = 1 + np.square(param1) + np.square(param2) - 0.1 * np.cos(16 * math.atan(param1 / param2))
+        fitness = (1 - param1 / 2 + param1 ** 5 + param2 ** 3) * np.exp(-param1 ** 2 - param2 ** 2)
     else:
-        fitness = 1 + np.sum(np.square(params), axis=1) - 0.1 * np.sum(np.cos(16 * np.arctan(params[:, 0] / params[:, 1])), axis=1)
+        fitness = (1 - params[:, 0] / 2 + params[:, 0] ** 5 + params[:, 1] ** 3) * np.exp(-params[:, 0] ** 2 - params[:, 1] ** 2)
     # check if the fitness should be minimized
     return fitness if minimize else -fitness
 
+def cos_function_2D(X):
+    x1 = X[0,:]
+    x0 = X[1,:]
+    y = (np.cos(x1-2) + np.cos(x0-2)) + (np.cos(2*x1-4) + np.cos(2*x0-4)) + (np.cos(4*x1-8) + np.cos(4*x0-8))
+    return -y
 
 # use the formula in cos_function_2D to create a fitness function
 def cos_function(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
@@ -135,11 +145,11 @@ def cos_function(params:np.ndarray, minimize=False, plotable=False) -> np.ndarra
             raise ValueError('The parameters must be a 2D numpy array.')
         param1 = params[0, :]
         param2 = params[1, :]
-        fitness = np.cos(param1) * np.cos(param2) * np.exp(np.square(-1 * (param1 + math.pi)) - np.square(param2 + math.pi))
+        fitness = np.cos(param2 - 2) + np.cos(param1 - 2) + (np.cos(2 * param2 - 4) + np.cos(2 * param1 - 4)) + (np.cos(4 * param2 - 8) + np.cos(4 * param1 - 8))
     else:
-        fitness = np.cos(params[:, 0]) * np.cos(params[:, 1]) * np.exp(np.square(-1 * (params[:, 0] + math.pi)) - np.square(params[:, 1] + math.pi))
+        fitness = np.sum(np.cos(params - 2), axis=1) + (np.sum(np.cos(2 * params - 4), axis=1)) + (np.sum(np.cos(4 * params - 8), axis=1))
     # check if the fitness should be minimized
-    return fitness if minimize else -fitness
+    return -fitness if minimize else fitness
 
 # Griewank function that takes an array of parameters and returns an array of fitness values
 def griewank(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
@@ -365,18 +375,18 @@ def get_obj_func(name):
     :return: The objective function and thier bounds.
     """
     return {
-        'sphere': (sphere, [(-3, -3),(3, 3)]),
-        'rosenbrock': (rosenbrock, [(-2.048, 2.048), (-2.048, 2.048)]),
-        'cosine_mixture': (cosine_mixture, [(-1, -1), (1, 1)]),
-        'ghabit': (ghabit, [(-3, -3),(3, 3)]),
-        'cos_function': (cos_function, [(-2, -2),(4, 4)]),
-        'ackley': (ackley, [(-32, -32),(32, 32)]),
-        'rastrigin': (rastrigin, [(-5.12, -5.12),(5.12, 5.12)]),
-        'griewank': (griewank, [(-600, -600),(600, 600)]),
-        'bohachevsky': (bohachevsky , [(-100, -100),(100, 100)]),
-        'booth': (booth, [(-10, -10),(10, 10)]),
-        'three_hump_camel': (three_hump_camel, [(-5, -5),(5, 5)]),
-        'easom': (easom, [(-100, -100),(100, 100)]),
-        'six_hump_camel': (six_hump_camel, [(-3, -2),(3, 2)]),
-    }.get(name, None)
+        'sphere': (sphere, [(-3, -3),(3, 3)], 0, "maximize"),
+        'rosenbrock': (rosenbrock, [(-2.048, 2.048), (-2.048, 2.048)], 0, "minimize"),
+        'cosine_mixture': (cosine_mixture, [(-1, -1), (1, 1)], 0.2, "maximize"),
+        'ghabit': (ghabit, [(-3, -3),(3, 3)], 1.058, "maximize"),
+        'cos_function': (cos_function, [(-2, -2),(4, 4)], 6, "maximize"),
+        'ackley': (ackley, [(-32, -32),(32, 32)], 0, "minimize"),
+        'rastrigin': (rastrigin, [(-5.12, -5.12),(5.12, 5.12)], 0, "minimize"),
+        'griewank': (griewank, [(-600, -600),(600, 600)], 0, "minimize"),
+        'bohachevsky': (bohachevsky , [(-100, -100),(100, 100)], 0, "minimize"),
+        'booth': (booth, [(-10, -10),(10, 10)], 0, "minimize"),
+        'three_hump_camel': (three_hump_camel, [(-5, -5),(5, 5)], 0, "minimize"),
+        'easom': (easom, [(-100, -100),(100, 100)], -1, "minimize"),
+        'six_hump_camel': (six_hump_camel, [(-3, -2),(3, 2)], -1.0316, "minimize"),
+    }.get(name)
     
