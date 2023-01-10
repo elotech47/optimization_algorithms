@@ -2,14 +2,15 @@ environment_config:
   n_agents: 10
   n_dim: 2
   ep_length: 20
-  minimize: False
   freeze: True
   fraq_refinement: 0.5
   env_list: [sphere, rosenbrock, cosine_mixture, ghabit, cos_function, ackley, rastrigin, griewank, bohachevsky, booth, three_hump_camel, easom, six_hump_camel]
   bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
-  max_episode: 50
+  max_episode: 10001
   plot_directory: plots/
   fps: 2
+  env_id: [0, 2, 3, 4]
+  change_freq: 100
 
 
 
@@ -35,9 +36,11 @@ policy_config:
   split_fraq: 0.5
   explore_state_dim: 4
   exploit_state_dim: 4
-  update_interval: 10
-  save_interval: 100
+  update_interval: 20
+  save_interval: 1000
   model_path: models
+  test_model_path: models/models_0
+  animate_interval: 500
   
 
 environment:
