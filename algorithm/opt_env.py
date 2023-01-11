@@ -59,11 +59,6 @@ class OptEnv(gym.Env):
             self.opt_obj_value = opt_value
 
 
-
-        self.bestValueHistory = np.zeros(shape=(self.ep_length, 1))
-        self.ValueHistory = np.zeros(shape=(self.ep_length+1, self.n_agents)) # store the objective value history of each agent
-        self.stateHistory = np.zeros(shape=(self.ep_length+1, self.n_agents,  self.n_dim+1))
-
         self.lower_bound_actions = np.array(
             [-np.inf for _ in range(self.n_dim)], dtype=np.float64) # lower bound of the action space
         self.upper_bound_actions = np.array(
@@ -98,8 +93,8 @@ class OptEnv(gym.Env):
         assert self.action_space.contains(actions), f"{actions!r} ({type(actions)}) invalid" # check if the action is valid
 
         states = self.state.copy()  # get the current state
-        bestAgent = np.argmax(self.state[:,-1]) # get the best agent
-        zprev = states[:].copy() # store the previous state
+        bestAgent = np.argmin(self.state[:,-1]) if self.minimize else np.argmax(self.state[:,-1]) # get the best agent
+        zprev = states.copy() # store the previous state
         states[:, :-1] += actions # update the state
         if self.freeze:
             states[bestAgent, :-1] = zprev[bestAgent, :-1] # freeze the best agent
@@ -116,7 +111,9 @@ class OptEnv(gym.Env):
         if self.minimize:
             self.done = np.where(self.obj_values <= (self.opt_obj_value + 0.001), True, False)
         else:
-            self.done = np.where(self.obj_values >= 0.9*self.opt_obj_value, True, False)
+            self.done = np.where(self.obj_values >= 0.7*self.opt_obj_value, True, False)
+
+        # print("Step: ", self.current_step, " Obj_values: ", self.obj_values, " Done: ", self.done, "Optimal value: ", self.opt_obj_value)
 
         # add self.done to all agents without for loop
         agents_done = np.array(self.done)
@@ -139,8 +136,11 @@ class OptEnv(gym.Env):
         # store ValueHistory for each step
         self.ValueHistory[self.current_step, :] = self.obj_values
         self.refinement_idx = self._get_refinement_idxs()
+        self.best_agent_idxs.append(self.best_agent_idx)
         # get the reward for each agent
         rewards = self._reward_fn(bestAgent)
+        # update episode return
+        self.episode_return += rewards
         return self.state, rewards, agents_done, self.obj_values
 
     def _scale(self, x, min, max):
@@ -155,22 +155,23 @@ class OptEnv(gym.Env):
         return 20 * (z - 0.5)
 
     def _reward_fn(self, best_idx):
-        reward =  self._measure_reward(self.state[:, -1], self.state[best_idx, -1])
+        reward =  self._measure_reward(self.state[:, -1])
         # set the reward of the best agent to 0
-        reward[best_idx] = 0
+        reward[best_idx] += 10
         # if agent is stock for a long time, give it a negative reward
         for agent in range(self.n_agents):
             z_recent = self.ValueHistory[agent][-min(3, self.current_step):]
             if len(np.unique(z_recent)) == 1 and self.current_step > 3 and np.unique(z_recent) != 0:
-                reward[agent] = -0.2
+                reward[agent] -= 5
             # add a reward if agent is at 90% close to the opt_value
             if self.minimize:
                 if self.obj_values[agent] <= self.opt_obj_value + 0.001:
-                    reward[agent] += 50
+                    reward[agent] += 100 * ((self.opt_obj_value + 0.0001) / self.obj_values[agent])
             else:
-                if self.obj_values[agent] >= 0.9*self.opt_obj_value:
-                    reward[agent] += 50
-        return reward
+                if self.obj_values[agent] >= 0.5*self.opt_obj_value:
+                    reward[agent] += (self.obj_values[agent] / self.opt_obj_value) * 100
+            #print(f"Agent {agent} reward: {reward[agent]}, obj_value: {self.obj_values[agent]}")
+        return reward/(self.current_step+1 * 0.5) 
             
     def _generate_init_state(self):
         if self.init_state is None:
@@ -193,12 +194,14 @@ class OptEnv(gym.Env):
         else:
             sorted_idx = np.argsort(np.linalg.norm(self.state[:, :2] - self.state[np.argmax(self.state[:, -1]), :2], axis=1))
         n = int(self.fraq_refinement * self.n_agents)
+        self.refinement_idxs.append(sorted_idx[:n])
         return sorted_idx[:n]
 
     def _set_episode_best_info(self):
         """ Set the best agent and best objective value for the current episode"""
         sorted_obj = sorted(self.obj_values, reverse=not self.minimize)
         self.best_agent_idx = np.where(self.obj_values == sorted_obj[0])[0][0]
+        # self.best_agent_idxs.append(self.best_agent_idx)
         self.worst_agent_idx = np.where(self.obj_values == sorted_obj[-1])[0][0]
         self.best_time_step = self.current_step  # store the time step when the best objective value is found
         self.best_agent_value = self.obj_values[self.best_agent_idx]
@@ -221,6 +224,12 @@ class OptEnv(gym.Env):
         self.current_step = 0
         self.state, self.obj_values = self._generate_init_state() #np.array([self._generate_init_state(agent) for agent in range(self.n_agents)])
          # store the state history of each agent
+        self.episode_return = np.zeros(shape=(1, self.n_agents))
+        self.bestValueHistory = np.zeros(shape=(self.ep_length, 1))
+        self.ValueHistory = np.zeros(shape=(self.ep_length+1, self.n_agents)) # store the objective value history of each agent
+        self.stateHistory = np.zeros(shape=(self.ep_length+1, self.n_agents,  self.n_dim+1))
+        self.refinement_idxs = []
+        self.best_agent_idxs = []
         self._set_episode_best_info()
         self.ValueHistory[self.current_step, :] = self.obj_values
         self.bestValueHistory[self.current_step] = self.best_agent_value
