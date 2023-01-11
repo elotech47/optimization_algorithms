@@ -15,7 +15,9 @@ import yaml
 from optimization_functions import *
 import imageio
 import re
+from log import log_param
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 def get_args():
     """
@@ -94,6 +96,7 @@ def initialize_policy(config:dict) -> MAPPO:
                      policy_config['split_fraq'], policy_config['explore_state_dim'],policy_config['exploit_state_dim'])
     # return the policy
     return policy
+
 def exploitation_communication_topology(states, global_best, minimize=False):
     """
     Exploitation communication topology.
@@ -110,10 +113,12 @@ def exploitation_communication_topology(states, global_best, minimize=False):
     std_observation = [[] for _ in range(n_dim)]
     # get the distance between the agents and the global best for each dimension
     for agent in range(n_agents):
+        agent_nbs = [i for i in range(n_agents) if i != agent]
+        nb = np.random.choice(agent_nbs)
         # std = euclidean distance between the agent and the global best for dimensions except the last one
         std = np.linalg.norm(states[agent, :-1] - global_best[:-1])
         for dim in range(n_dim):
-            obs = [states[agent, dim], global_best[dim], states[agent, n_dim], global_best[n_dim]]
+            obs = [(global_best[dim] - states[agent, dim]), (global_best[n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim])]
             observation[dim].append(np.array(obs))
             std_observation[dim].append(std)
 
@@ -137,12 +142,12 @@ def exploration_communication_topology(states, minimize=False):
     # get best agent among states
     best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     for agent in range(n_agents):
-        agent_nbs = [i for i in range(n_agents) if i != agent]
+        agent_nbs = [i for i in range(n_agents) if i != agent and i != best_agent]
         # get a random neighbor
         nb = np.random.choice(agent_nbs)
         std = np.linalg.norm(states[agent, :-1] - states[nb, :-1])
         for dim in range(n_dim):
-            obs = [states[agent, dim], states[nb, dim], states[agent, n_dim], states[nb, n_dim]]
+            obs = [(states[best_agent, dim] - states[agent, dim]), (states[best_agent, dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim])]
             observation[dim].append(np.array(obs))
             std_observation[dim].append(std)
 
@@ -150,7 +155,7 @@ def exploration_communication_topology(states, minimize=False):
     std_observation_ = [np.array(std_observation[dim]).reshape(n_agents, 1) for dim in range(n_dim)]
     return observation_, std_observation_
 
-def general_communication_topology(states, minimize=False):
+def general_communication_topology(states, global_best, minimize=False):
     """
     General communication topology.
     :param states: The states.
@@ -166,14 +171,15 @@ def general_communication_topology(states, minimize=False):
     # get the distance between the agents for each dimension
     best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     for agent in range(n_agents):
-        for nb in range(n_agents):
-            if agent != nb:
-                std = np.linalg.norm(states[agent, :-1] - states[nb, :-1])
-                for dim in range(n_dim):
-                    obs = [states[agent, dim], states[nb, dim], states[agent, n_dim], states[nb, n_dim],
-                            states[best_agent, dim], states[best_agent, n_dim]]
-                    observation[dim].append(np.array(obs))
-                    std_observation[dim].append(std)
+        agent_nbs = [i for i in range(n_agents) if i != agent]
+        # get a random neighbor
+        nb = np.random.choice(agent_nbs)
+        std = np.linalg.norm(states[agent, :-1] - states[best_agent, :-1])
+        for dim in range(n_dim):
+            obs = [(states[best_agent, dim] - states[agent, dim]), (states[best_agent, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]),
+                        (global_best[dim] - states[agent, dim]), (global_best[n_dim] - states[agent, n_dim])]
+            observation[dim].append(np.array(obs))
+            std_observation[dim].append(std)
 
     observation_ = [np.array(observation[dim]).reshape(n_agents, len(obs)) for dim in range(n_dim)]
     std_observation_ = [np.array(std_observation[dim]).reshape(n_agents,  1) for dim in range(n_dim)]
@@ -213,11 +219,11 @@ def generate_observations(env: OptEnv, split=False) -> np.ndarray:
             std_observation.append(np.array(std_obs))
     else:
         # get the communication topology for general case
-        observation, std_observation = general_communication_topology(states, env.minimize)
+        observation, std_observation = general_communication_topology(states, global_best, env.minimize)
     return observation, std_observation
 
 
-def animate(env:OptEnv, env_id, iter, config:dict):
+def animate(env:OptEnv, env_id, iter, config:dict, gif_dir):
     plot_directory = config['environment_config']['plot_directory']
     env_name = env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
     title = env_name + f"_{iter}_.gif"
@@ -239,9 +245,9 @@ def animate(env:OptEnv, env_id, iter, config:dict):
         plt.colorbar()
         for i in range(env.n_agents):
             pos = agents_pos[count][i]
-            if i == env.best_agent_idx:
+            if i == env.best_agent_idxs[count]:
                 plt.plot(pos[0], pos[1] ,marker=markers[1], markersize=19, markerfacecolor='b')
-            elif i in env.refinement_idx:
+            elif i in env.refinement_idxs[count]:
                 plt.plot(pos[0], pos[1] ,marker=markers[2], markersize=17, markerfacecolor='g')
             else:
                 plt.plot(pos[0], pos[1] ,marker=markers[0], markersize=15, markerfacecolor='r')
@@ -262,14 +268,16 @@ def animate(env:OptEnv, env_id, iter, config:dict):
         plt.close(fig)
         plt.show()
         count += 1
-        if count >= ep_length:
+        if count >= env.current_step:
             break
     images = []
     filenames = os.listdir(plot_directory)
     filenames.sort(key=lambda f: int(re.sub('\D', '', f)))
     for filename in filenames:
         images.append(imageio.imread(plot_directory + filename))
-    imageio.mimsave(title, images, fps=fps)
+    # if gif folder not prsent create it
+    gif_dir_ = gif_dir + title + ".gif"
+    imageio.mimsave(gif_dir_, images, fps=fps)
     for filename in set(filenames):
         os.remove(plot_directory + filename)
 
@@ -283,6 +291,16 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
     """
     max_episode = config['environment_config']['max_episode']
     env_ids = config['environment_config']['env_id']
+    decay_rate = config['policy_config']['std_decay_rate']
+    log_directory = config['environment_config']['log_directory'] + datetime.now().strftime("%Y%m%d-%H%M%S") + "_train.json"
+    model_dir = config['policy_config']['model_path'] + datetime.now().strftime("%Y%m%d-%H%M%S") + "_model/" 
+    gif_dir = config['environment_config']['gif_directory'] + "train/" + datetime.now().strftime("%Y%m%d-%H%M%S") + "/"
+    if not os.path.exists(gif_dir):
+        os.makedirs(gif_dir)
+    # create model directory if not present
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+
     # chose random id in list
     for episode in range(max_episode):
         if episode % int(config['environment_config']['change_freq']) == 0:
@@ -297,7 +315,7 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
             # get actions
             agent_actions = []
             for dim in range(env.n_dim):
-                action = policy.select_action(obs[dim], std_obs[dim], step, env.refinement_idx)
+                action = policy.select_action(obs[dim], std_obs[dim], env.refinement_idx)
                 agent_actions.append(action)
 
             actions = np.transpose(np.array(agent_actions))
@@ -318,19 +336,35 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
             if np.sum(dones) > env.n_agents/2:
                 print(f"More than {np.sum(dones)} agents are done in episode {episode} at step {step}")
                 break
-                
+        
+        # log env.episode_return
+        episode_return = np.mean(env.episode_return)
+        # name the log file with the date and time
+        if episode % config['environment_config']['log_interval'] == 0: 
+            episode_info = {"episode": episode, "env_id": env_id, "env_name": config['environment_config']['env_list'][env_id]}
+            log_param(f"episode_return", episode_return , episode_info, log_directory)
+
         # update the policy
         if episode % config['policy_config']['update_interval'] == 0:
             policy.update()
-            print(f"Updated the policy at episode {episode} for {config['environment_config']['env_list'][env_id]} environment")
+            #print(f"Updated the policy at episode {episode} for {config['environment_config']['env_list'][env_id]} environment")
+        # decay policy std
+        if episode % config['policy_config']['std_decay_freq'] == 0:
+            if policy.split_agent:
+                policy.exploitation_policy.std.decay_fixed_std(decay_rate)
+                policy.exploration_policy.std.decay_fixed_std(decay_rate)
+                print(f"Decayed the policy std at episode {episode} for {config['environment_config']['env_list'][env_id]} environment to {policy.exploitation_policy.std.init_std} and {policy.exploration_policy.std.init_std}")
+            else:
+                policy.policy.std.decay_fixed_std(decay_rate)
+                print(f"Decayed the policy std at episode {episode} for {config['environment_config']['env_list'][env_id]} environment to {policy.policy.std.init_std}")
+           
         # save the model
         if episode % config['policy_config']['save_interval'] == 0:
-            model_path = "models/" + config['policy_config']['model_path'] + f"_{episode}"
+            model_path = model_dir + f"_{episode}"
             policy.save(model_path)
         # animate the training process
         if episode % config['policy_config']['animate_interval'] == 0:
-            animate(env, env_id, episode, config)
-        
+            animate(env, env_id, episode, config, gif_dir)
             
 
 def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
@@ -343,18 +377,26 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
 
     env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
     env = envs.get_env(env_name)
-    states = env.reset()
+    _ = env.reset()
     model_name = config['policy_config']['test_model_path']
+    gif_dir = config['environment_config']['gif_directory'] + "test/" + datetime.now().strftime("%Y%m%d-%H%M%S") + "/"
+    if not os.path.exists(gif_dir):
+        os.makedirs(gif_dir)
     # load model
     iters = "test"
     policy.load(model_name)
+    if policy.split_agent:
+        policy.exploitation_policy.fixed_std = False
+        policy.exploration_policy.fixed_std = False
+    else:
+        policy.policy.fixed_std = False
     for step in range(env.ep_length):
         # get observations and std_obs
         obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
         # get actions
         agent_actions = []
         for dim in range(env.n_dim):
-            action = policy.select_action(obs[dim], std_obs[dim], step, env.refinement_idx)
+            action = policy.select_action(obs[dim], std_obs[dim], env.refinement_idx)
             agent_actions.append(action)
         # print(env.refinement_idx)
         actions = np.transpose(np.array(agent_actions))
@@ -364,8 +406,9 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
         if np.sum(dones) > env.n_agents/3:
             print(f"More than {np.sum(dones)} agents are done at step {step}")
             break
+    
         
-    animate(env, env_id, iters, config)
+    animate(env, env_id, iters, config, gif_dir)
     print(env.get_best_agent())
 
 def main():
