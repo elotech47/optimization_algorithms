@@ -1,29 +1,32 @@
 environment_config:
-  n_agents: 10
+  n_agents: 20
   n_dim: 2
-  ep_length: 20
+  ep_length: 30
   freeze: True
   fraq_refinement: 0.5
   env_list: [sphere, rosenbrock, cosine_mixture, ghabit, cos_function, ackley, rastrigin, griewank, bohachevsky, booth, three_hump_camel, easom, six_hump_camel]
   bounds: [[(-3, 3),(-3, 3)], [(-3, 3), (-2, 2)]]
-  max_episode: 10001
+  max_episode: 20001
   plot_directory: plots/
+  gif_directory: gifs/
   fps: 2
-  env_id: [0, 2, 3, 4]
-  change_freq: 100
+  env_id: [2, 3, 4]
+  change_freq: 2000
+  log_directory: logs/
+  log_interval: 100
 
 
 
 policy_config:
-  state_dim: 4
+  state_dim: 6
   action_dim: 1
   init_std: 0.2
-  std_min: 0.001
-  std_max: 0.2
+  std_min: 0.005
+  std_max: 0.1
   std_type: linear
-  fixed_std: False
-  hidden_dim: [32,32,32]
-  episode_length: 20
+  fixed_std: True
+  hidden_dim: [16, 16]
+  episode_length: 30
   betas: 0.999
   lr: 0.00001
   gamma: 0.9
@@ -36,11 +39,13 @@ policy_config:
   split_fraq: 0.5
   explore_state_dim: 4
   exploit_state_dim: 4
-  update_interval: 20
-  save_interval: 1000
-  model_path: models
-  test_model_path: models/models_0
-  animate_interval: 500
+  update_interval: 10
+  save_interval: 2000
+  model_path: models/
+  test_model_path: models/models_9000
+  animate_interval: 2000
+  std_decay_freq: 100
+  std_decay_rate: 0.001
   
 
 environment:
