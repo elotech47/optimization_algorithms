@@ -116,7 +116,7 @@ def ghabit(params:np.ndarray, minimize=False, plotable=False) -> np.ndarray:
     else:
         fitness = (1 - params[:, 0] / 2 + params[:, 0] ** 5 + params[:, 1] ** 3) * np.exp(-params[:, 0] ** 2 - params[:, 1] ** 2)
     # check if the fitness should be minimized
-    return fitness if minimize else -fitness
+    return -fitness if minimize else fitness
 
 def cos_function_2D(X):
     x1 = X[0,:]
