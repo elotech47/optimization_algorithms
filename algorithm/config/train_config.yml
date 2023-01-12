@@ -1,5 +1,5 @@
 environment_config:
-  n_agents: 20
+  n_agents: 14
   n_dim: 2
   ep_length: 30
   freeze: True
@@ -9,7 +9,7 @@ environment_config:
   max_episode: 20001
   plot_directory: plots/
   gif_directory: gifs/
-  fps: 2
+  fps: 1
   env_id: [2, 3, 4]
   change_freq: 2000
   log_directory: logs/
@@ -21,10 +21,10 @@ policy_config:
   state_dim: 6
   action_dim: 1
   init_std: 0.2
-  std_min: 0.005
-  std_max: 0.1
+  std_min: 0.02
+  std_max: 0.4
   std_type: linear
-  fixed_std: True
+  fixed_std: False
   hidden_dim: [16, 16]
   episode_length: 30
   betas: 0.999
@@ -37,25 +37,45 @@ policy_config:
   ckpt_path: 
   split_agent: True
   split_fraq: 0.5
-  explore_state_dim: 4
-  exploit_state_dim: 4
+  explore_state_dim: 6
+  exploit_state_dim: 6
   update_interval: 10
   save_interval: 2000
   model_path: models/
-  test_model_path: models/models_9000
+  test_model_path: models/20230111-090458_model/_20000
   animate_interval: 2000
   std_decay_freq: 100
   std_decay_rate: 0.001
+  std_obs_type: distance
   
 
-environment:
-  max_episodes: 50000
-  change_env: 5
-  update_timestep: 200
-  save_freq: 500
-  log_freq: 500
-  std_type: euclidean
-  ep_length: 100
-  print_freq: 500
-  save_cutoff: 100
-  transition_episode: 1000
+test_policy_config:
+  state_dim: 6
+  action_dim: 1
+  init_std: 0.005
+  std_min: 0.2
+  std_max: 0.5
+  std_type: linear
+  fixed_std: False
+  hidden_dim: [16, 16]
+  ep_length: 30
+  betas: 0.999
+  lr: 0.00001
+  gamma: 0.9
+  K_epochs: 32
+  eps_clip: 0.2
+  initialization: 
+  pretrained: False
+  ckpt_path: 
+  split_agent: True
+  split_fraq: 0.5
+  explore_state_dim: 6
+  exploit_state_dim: 6
+  update_interval: 10
+  save_interval: 2000
+  model_path: models/
+  test_model_path: models/20230111-090458_model/_20000
+  animate_interval: 2000
+  std_decay_freq: 100
+  std_decay_rate: 0.001
+  std_obs_type: distance

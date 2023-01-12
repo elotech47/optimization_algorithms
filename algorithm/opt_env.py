@@ -111,7 +111,7 @@ class OptEnv(gym.Env):
         if self.minimize:
             self.done = np.where(self.obj_values <= (self.opt_obj_value + 0.001), True, False)
         else:
-            self.done = np.where(self.obj_values >= 0.7*self.opt_obj_value, True, False)
+            self.done = np.where(self.obj_values >= 0.9*self.opt_obj_value, True, False)
 
         # print("Step: ", self.current_step, " Obj_values: ", self.obj_values, " Done: ", self.done, "Optimal value: ", self.opt_obj_value)
 
@@ -236,6 +236,7 @@ class OptEnv(gym.Env):
         self.stateHistory[self.current_step, :, :] = self._get_actual_state()
         self.state[:,-1] = self._scale(self.state[:,-1], self.worst_agent_value, self.best_agent_value)
         self.refinement_idx = self._get_refinement_idxs()
+        
         return np.array(self.state, dtype=np.float32)
 
     def _validate_state(self):

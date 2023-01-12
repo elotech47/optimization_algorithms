@@ -110,6 +110,9 @@ class ActorCritic(nn.Module):
                 action_mean = action_mean.reshape(action_var.shape)
             dist = normal.Normal(action_mean, action_var)
         action = dist.sample()
+        # print("action mean : ", action_mean)
+        # print("action var : ", action_var)
+        # print("action : ", action)
         action_logprob = dist.log_prob(action)
         return action.detach(), action_logprob.detach()
 
@@ -224,12 +227,14 @@ class MAPPO:
             exploration_state = state[~exploitation_agents_idx]
             exploration_std_obs = std_obs[~exploitation_agents_idx]
             exploration_state = torch.FloatTensor(exploration_state).to(self.device)
+            # print("Exploration Act")
             exploration_action, exploration_action_logprob = self.exploration_policy.act(exploration_state, exploration_std_obs)
 
             # select action for exploitation agents
             exploitation_state = state[exploitation_agents_idx]
             exploitation_std_obs = std_obs[exploitation_agents_idx]
             exploitation_state = torch.FloatTensor(exploitation_state).to(self.device)
+            # print("Exploitation Act")
             exploitation_action, exploitation_action_logprob = self.exploitation_policy.act(exploitation_state, exploitation_std_obs)
             # concatenate the actions and logprobs based on exploration_agents_idx
             action[exploitation_agents_idx] = exploitation_action.reshape(-1, self.action_dim)
@@ -330,6 +335,8 @@ class MAPPO:
             rewards, old_states, old_actions, old_logprobs, old_iters, old_std_obs = self.__get_buffer_info(self.buffer)
             self.__update_old_policy(self.policy, self.old_policy, self.optimizer, rewards, old_states, old_actions, old_logprobs, old_std_obs)
             self.buffer.clear_memory()
+
+            
     def save(self, filename):
         if self.split_agent:
             torch.save(self.exploration_policy.state_dict(), filename + "_exploration" + ".pth")
