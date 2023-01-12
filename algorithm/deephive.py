@@ -86,9 +86,9 @@ def initialize_policy(config:dict) -> MAPPO:
     :return: The policy.
     """
     # get the policy config
-    policy_config = config['policy_config']
+    policy_config = config
     # create the policy
-    policy = MAPPO(policy_config['state_dim'], policy_config['action_dim'],config['environment_config']['ep_length'],policy_config['init_std'],
+    policy = MAPPO(policy_config['state_dim'], policy_config['action_dim'],policy_config['ep_length'],policy_config['init_std'],
                     policy_config['std_min'], policy_config['std_max'], policy_config['std_type'], policy_config['fixed_std'],
                     policy_config['hidden_dim'], policy_config['lr'], policy_config['betas'], policy_config['gamma'],
                     policy_config['K_epochs'], policy_config['eps_clip'], policy_config['initialization'],
@@ -97,7 +97,7 @@ def initialize_policy(config:dict) -> MAPPO:
     # return the policy
     return policy
 
-def exploitation_communication_topology(states, global_best, minimize=False):
+def exploitation_communication_topology(states, global_best, minimize=False, std_obs_type='Euclidean'):
     """
     Exploitation communication topology.
     :param states: The states.
@@ -111,15 +111,30 @@ def exploitation_communication_topology(states, global_best, minimize=False):
     # initialize the communication topology
     observation = [[] for _ in range(n_dim)]
     std_observation = [[] for _ in range(n_dim)]
+    best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     # get the distance between the agents and the global best for each dimension
     for agent in range(n_agents):
         agent_nbs = [i for i in range(n_agents) if i != agent]
         nb = np.random.choice(agent_nbs)
         # std = euclidean distance between the agent and the global best for dimensions except the last one
-        std = np.linalg.norm(states[agent, :-1] - global_best[:-1])
         for dim in range(n_dim):
-            obs = [(global_best[dim] - states[agent, dim]), (global_best[n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim])]
+            obs = [(global_best[dim] - states[agent, dim]), (global_best[n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]), 
+                            (states[best_agent, dim] - states[agent, dim]), (states[best_agent, n_dim] - states[agent, n_dim]) ]
             observation[dim].append(np.array(obs))
+            if std_obs_type == 'Euclidean':
+                std = np.linalg.norm(states[agent, :-1] - global_best[:-1])
+            elif std_obs_type == 'Manhattan':
+                std = np.sum(np.abs(states[agent, :-1] - global_best[:-1]))
+            elif std_obs_type == 'Chebyshev':
+                std = np.max(np.abs(states[agent, :-1] - global_best[:-1]))
+            elif std_obs_type == 'Minkowski':
+                std = np.power(np.sum(np.power(np.abs(states[agent, :-1] - global_best[:-1]), 3)), 1/3)
+            elif std_obs_type == 'Cosine':
+                std = 1 - np.dot(states[agent, :-1], global_best[:-1]) / (np.linalg.norm(states[agent, :-1]) * np.linalg.norm(global_best[:-1]))
+            elif std_obs_type == 'distance':
+                std = np.subtract(states[agent, dim], global_best[dim])
+            else:
+                raise ValueError('The std_obs_type is not supported.')
             std_observation[dim].append(std)
 
     observation_ = [np.array(observation[dim]).reshape(n_agents, len(obs)) for dim in range(n_dim)]
@@ -147,7 +162,7 @@ def exploration_communication_topology(states, minimize=False):
         nb = np.random.choice(agent_nbs)
         std = np.linalg.norm(states[agent, :-1] - states[nb, :-1])
         for dim in range(n_dim):
-            obs = [(states[best_agent, dim] - states[agent, dim]), (states[best_agent, dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim])]
+            obs = [(states[best_agent, dim] - states[agent, dim]), (states[best_agent, dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]), 0, 0]
             observation[dim].append(np.array(obs))
             std_observation[dim].append(std)
 
@@ -185,7 +200,7 @@ def general_communication_topology(states, global_best, minimize=False):
     std_observation_ = [np.array(std_observation[dim]).reshape(n_agents,  1) for dim in range(n_dim)]
     return observation_, std_observation_
 
-def generate_observations(env: OptEnv, split=False) -> np.ndarray:
+def generate_observations(env: OptEnv, split=False, std_obs_type='distance') -> np.ndarray:
     """
     Generate the observations.
     :param env: The environment.
@@ -201,7 +216,7 @@ def generate_observations(env: OptEnv, split=False) -> np.ndarray:
     if split:
         refinement_idx = env.refinement_idx
         # get the communication topology for exploitation
-        exploit_observation, exploit_std_observation = exploitation_communication_topology(states, global_best, env.minimize)
+        exploit_observation, exploit_std_observation = exploitation_communication_topology(states, global_best, env.minimize, std_obs_type)
         # get the communication topology for exploration
         explore_observation, explore_std_observation = exploration_communication_topology(states, env.minimize)
         # combine the both observation and std_observation based on the reinforcement_idx
@@ -300,7 +315,6 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
     # create model directory if not present
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-
     # chose random id in list
     for episode in range(max_episode):
         if episode % int(config['environment_config']['change_freq']) == 0:
@@ -311,7 +325,7 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
         _ = env.reset()
         for step in range(env.ep_length):
             # get observations and std_obs
-            obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
+            obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'], std_obs_type=config['policy_config']['std_obs_type'])
             # get actions
             agent_actions = []
             for dim in range(env.n_dim):
@@ -337,8 +351,11 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
                 print(f"More than {np.sum(dones)} agents are done in episode {episode} at step {step}")
                 break
         
-        # log env.episode_return
-        episode_return = np.mean(env.episode_return)
+        # # log env.episode_return
+        # print(env.episode_return)
+        exploit_return = np.mean(np.array(env.episode_return[0])[env.refinement_idx])
+        explore_return = np.mean(np.array(env.episode_return[0])[~env.refinement_idx])
+        episode_return = {"exploit_return": exploit_return, "explore_return": explore_return}
         # name the log file with the date and time
         if episode % config['environment_config']['log_interval'] == 0: 
             episode_info = {"episode": episode, "env_id": env_id, "env_name": config['environment_config']['env_list'][env_id]}
@@ -352,7 +369,7 @@ def train_policy(config:dict, envs: OptEnvCache, policy: MAPPO):
         if episode % config['policy_config']['std_decay_freq'] == 0:
             if policy.split_agent:
                 policy.exploitation_policy.std.decay_fixed_std(decay_rate)
-                policy.exploration_policy.std.decay_fixed_std(decay_rate)
+                policy.exploration_policy.std.decay_fixed_std(decay_rate/10)
                 print(f"Decayed the policy std at episode {episode} for {config['environment_config']['env_list'][env_id]} environment to {policy.exploitation_policy.std.init_std} and {policy.exploration_policy.std.init_std}")
             else:
                 policy.policy.std.decay_fixed_std(decay_rate)
@@ -386,13 +403,13 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
     iters = "test"
     policy.load(model_name)
     if policy.split_agent:
-        policy.exploitation_policy.fixed_std = False
-        policy.exploration_policy.fixed_std = False
+        policy.exploitation_policy.std.fixed_std = False
+        policy.exploration_policy.std.fixed_std = False
     else:
         policy.policy.fixed_std = False
     for step in range(env.ep_length):
         # get observations and std_obs
-        obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'])
+        obs, std_obs = generate_observations(env, split=config['policy_config']['split_agent'], std_obs_type=config['test_policy_config']['std_obs_type'])
         # get actions
         agent_actions = []
         for dim in range(env.n_dim):
@@ -400,6 +417,8 @@ def test_policy(config:dict, envs: OptEnvCache, policy: MAPPO, env_id: int):
             agent_actions.append(action)
         # print(env.refinement_idx)
         actions = np.transpose(np.array(agent_actions))
+        #print(actions)
+        #print(policy.exploration_policy.std.init_std)
         # step the environment
         next_states, rewards, dones, _ = env.step(actions)
         # stop if there is more than half done in dones
@@ -421,12 +440,14 @@ def main():
     # create the environment
     envs = prepare_environment(config)
     # create the policy
-    policy = initialize_policy(config)
+    
     # train the policy
     if mode == "train": 
+        policy = initialize_policy(config['policy_config'])
         train_policy(config, envs, policy)
     # test the policy
     elif mode == "test":
+        policy = initialize_policy(config['test_policy_config'])
         test_policy(config, envs, policy, env_id)
     else:
         raise ValueError("Unknown mode")
