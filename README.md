@@ -45,3 +45,22 @@ DeepHive is released under the MIT License.
 - Color exploiting agents
 - Confirm the best agent does not change
 - write tests
+
+
+```
+ def exploration_reward(agent_state, best_agent_state, minimize=False):
+    distance = np.linalg.norm(agent_state[:-1] - best_agent_state[:-1])  # Euclidean distance between current position and best position
+    return distance if minimize else -distance 
+```
+```
+def exploration_action(agent_state,best_agent_state, noise_std=0.1):
+    action = agent_state - best_agent_state
+    action += noise_std*np.random.randn(action.shape)
+    return action 
+```
+```
+def exploration_reward(agent_state, best_agent_state, last_best_agent_state, minimize=False):
+    improvement_rate = (last_best_agent_state - best_agent_state) / last_best_agent_state
+    distance = np.linalg.norm(agent_state[:-1] - best_agent_state[:-1])
+    return improvement_rate*distance if minimize else -improvement_rate*distance
+```
