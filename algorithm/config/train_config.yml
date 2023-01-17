@@ -9,24 +9,25 @@ environment_config:
   max_episode: 20001
   plot_directory: plots/
   gif_directory: gifs/
-  fps: 1
+  fps: 2
   env_id: [2, 3, 4]
-  change_freq: 2000
+  change_freq: 5000
   log_directory: logs/
   log_interval: 100
+  use_actual_best: False
 
 
 
 policy_config:
-  state_dim: 6
+  state_dim: 4
   action_dim: 1
   init_std: 0.2
-  std_min: 0.02
-  std_max: 0.4
+  std_min: 0.01
+  std_max: 0.5
   std_type: linear
-  fixed_std: False
+  fixed_std: True
   hidden_dim: [16, 16]
-  episode_length: 30
+  ep_length: 30
   betas: 0.999
   lr: 0.00001
   gamma: 0.9
@@ -53,8 +54,8 @@ test_policy_config:
   state_dim: 6
   action_dim: 1
   init_std: 0.005
-  std_min: 0.2
-  std_max: 0.5
+  std_min: 0.1
+  std_max: 0.2
   std_type: linear
   fixed_std: False
   hidden_dim: [16, 16]
@@ -74,7 +75,7 @@ test_policy_config:
   update_interval: 10
   save_interval: 2000
   model_path: models/
-  test_model_path: models/20230111-090458_model/_20000
+  test_model_path: models/20230113-164756_model/_20000
   animate_interval: 2000
   std_decay_freq: 100
   std_decay_rate: 0.001
