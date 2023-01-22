@@ -42,6 +42,7 @@ models/
 plots/
 *.gif
 logs/
+.neptune/
 
 
 # Installer logs
