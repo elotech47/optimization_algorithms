@@ -108,35 +108,28 @@ class OptEnv(gym.Env):
         if self.current_step >= self.ep_length-1:
             # set the done list to true for all agents
             self.done = [True for _ in range(self.n_agents)]
-        
         # check which agents have 90% of the opt_value and set their done to True
         if self.minimize:
             self.done = np.where(self.obj_values <= (self.opt_obj_value + 0.001), True, False)
         else:
             self.done = np.where(self.obj_values >= 0.9*self.opt_obj_value, True, False)
-
-        # print("Step: ", self.current_step, " Obj_values: ", self.obj_values, " Done: ", self.done, "Optimal value: ", self.opt_obj_value)
-
         # add self.done to all agents without for loop
         agents_done = np.array(self.done)
         self.current_step += 1  # Increment step counter
-        
-        # update best objective value
-        if self.minimize:
-            if np.min(self.obj_values) < self.best_agent_value:
-                self._set_episode_best_info()
-        else:
-            if np.max(self.obj_values) > self.best_agent_value:
-                self._set_episode_best_info()
+        # update the episode info
+        self._update_episode_info()
 
         # scale objective value to [0, 1]
         states[:, -1] = self._scale(self.obj_values, self.worst_agent_value, self.upper_limit) # change this later
         self.state = states
+        self._validate_state()
         
         # store StateHistory for each step
-        self.stateHistory[self.current_step, :, :] = self._get_actual_state()
+        self.stateHistory[self.current_step] = self._get_actual_state().copy()
+        self.best_agent = self.get_best_agent_scaled() # update the global best agent
+        print("Best agent: ", self.best_agent)
         # store ValueHistory for each step
-        self.ValueHistory[self.current_step, :] = self.obj_values
+        self.ValueHistory[self.current_step] = self.obj_values
         self.refinement_idx = self._get_refinement_idxs()
         self.best_agent_idxs.append(self.best_agent_idx)
         # get the reward for each agent
@@ -155,22 +148,39 @@ class OptEnv(gym.Env):
         return x * (max - min) + min
 
     def _reward_fn(self):
-        #reward =  self._measure_reward(self.state[:, -1])
-        reward = np.zeros(self.n_agents)
-        # get difference between current and previous state
-        zdiff = self.state[:, -1] - self.zprev[:, -1] 
-        reward = 10*zdiff + 20 * (self.state[:, -1] - 0.5)
-        for agent in range(self.n_agents):
-            if self.minimize: 
-                if self.obj_values[agent] <= self.opt_obj_value + 0.001:
-                    reward[agent] += 10 * ((self.opt_obj_value + 0.0001) / self.obj_values[agent])
-            else:
-                if self.obj_values[agent] >= 0.7*self.opt_obj_value:
-                    reward[agent] += (self.obj_values[agent] / self.opt_obj_value) * 100
-            z_recent = self.ValueHistory[agent][-min(3, self.current_step):]
-            if len(np.unique(z_recent)) == 1 and self.current_step > 3 and np.unique(z_recent) != 0:
-                reward[agent] -= 5
-        return reward/(self.current_step+1 * 0.5)
+        """ Reward function for the agents"""
+        rewards = np.zeros(self.n_agents)
+        if not self.minimize:
+            rewards = self.state[:, -1] - self.zprev[:, -1]
+        else:
+            rewards = self.zprev[:, -1] - self.state[:, -1]
+
+        # GIVE A REWARD OF -1 IF THE AGENTS IS STUCK EXCEPT FOR THE BEST AGENT
+        bestAgent = np.argmin(self.state[:,-1]) if self.minimize else np.argmax(self.state[:,-1])
+        if self.current_step > 1:
+            actual_state = self._get_actual_state()
+            # round all values to 3 decimal places
+            actual_state = np.round(actual_state, 6)
+            prev_state = np.round(self.stateHistory[self.current_step-2, :, :], 6)
+            if np.any(actual_state[:, :-1] == prev_state[:, :-1]):
+                 # get the index of all agents that have not moved except for the best agent
+                idx = np.where(np.all(actual_state[:, :-1] == prev_state[:, :-1], axis=1))[0]
+                # remove the best agent from the list
+                idx = np.delete(idx, np.where(idx == bestAgent))
+                # set the reward for the agents that are stuck to -1
+                rewards[idx] -= 1
+                if len(idx) > 0:
+                    print(f"Agents Stuck: {idx}")
+                
+        # GIVE AGENTS REWARD BASED ON HOW CLOSE THEY ARE TO THE OPTIMAL VALUE IF THEY ARE 60% OF THE WAY THERE
+        if self.minimize:
+            if np.any(self.obj_values <= (self.opt_obj_value + 0.01)):
+                rewards += (self.opt_obj_value - self.obj_values) / self.opt_obj_value
+        else:
+            if np.any(self.obj_values >= 0.6*self.opt_obj_value):
+                rewards += 10 * (self.obj_values - self.opt_obj_value) / self.opt_obj_value
+        print(f"Rewards: {rewards}")
+        return rewards * 10
     
     def _fit_surrogate(self):
         # fit the surrogate model
@@ -182,6 +192,22 @@ class OptEnv(gym.Env):
         x = self._rescale(x, self.min_pos, self.max_pos)
         # evaluate the surrogate model
         return self.surrogate.predict(x)
+
+    def _compare_surrogate(self, states, plot=False):
+        # get the objective values of the current state
+        obj_values = self.optFunc(self._rescale(states[:, :-1], self.min_pos, self.max_pos), self.minimize)
+        # get the objective values of the surrogate model
+        surrogate_values = self._evaluate_surrogate(states)
+        # get error between the two
+        error = np.abs(obj_values - surrogate_values)
+        if plot:
+            plt.figure(figsize=(10, 5))
+            plt.plot(obj_values, label="Actual", color="red")
+            plt.plot(surrogate_values, label="Surrogate" , color="blue")
+            plt.legend()
+            plt.show()
+        return error
+        
 
     def _generate_init_state(self):
         if self.init_state is None:
@@ -207,31 +233,46 @@ class OptEnv(gym.Env):
         self.refinement_idxs.append(sorted_idx[:n])
         return sorted_idx[:n]
 
-    def _set_episode_best_info(self):
-        """ Set the best agent and best objective value for the current episode"""
-        sorted_obj = sorted(self.obj_values, reverse=not self.minimize)
-        self.best_agent_idx = np.where(self.obj_values == sorted_obj[0])[0][0]
-        # self.best_agent_idxs.append(self.best_agent_idx)
-        self.worst_agent_idx = np.where(self.obj_values == sorted_obj[-1])[0][0]
-        self.best_time_step = self.current_step  # store the time step when the best objective value is found
-        self.best_agent_value = self.obj_values[self.best_agent_idx]
-        self.worst_agent_value = self.obj_values[self.worst_agent_idx]
-        if self.use_actual_best:
-            self.upper_limit = self.opt_obj_value
+
+    def _update_episode_info(self):
+        self.current_best_agent_idx = np.argmin(self.obj_values) if self.minimize else np.argmax(self.obj_values)
+        self.current_worse_agent_idx = np.argmax(self.obj_values) if self.minimize else np.argmin(self.obj_values)
+        if self.minimize:
+            if self.obj_values[self.current_best_agent_idx] < self.best_agent_value:
+                self.best_agent_value = self.obj_values[self.current_best_agent_idx]
+                self.best_agent_idx = self.current_best_agent_idx
+                self.best_time_step = self.current_step
+                # self.best_agent = self.get_best_agent_scaled()
+            if self.obj_values[self.current_worse_agent_idx] > self.worst_agent_value:
+                self.worst_agent_value = self.obj_values[self.current_worse_agent_idx]
+                self.worse_agent_idx = self.current_worse_agent_idx
+                self.worse_agent_state = self.state[self.current_worse_agent_idx]
+                # self.best_agent = self.get_best_agent_scaled()
         else:
-            self.upper_limit = self.best_agent_value
-        # get the best agent but in the scaled value
-        self.best_agent = self.state[self.best_agent_idx].copy()
-        self.best_agent[-1] = self._scale(self.obj_values[self.best_agent_idx], self.worst_agent_value, self.upper_limit)
-        self.worst_agent = self.state[self.worst_agent_idx].copy()
-        self.worst_agent[-1] = self._scale(self.obj_values[self.worst_agent_idx], self.worst_agent_value, self.upper_limit)
+            if self.obj_values[self.current_best_agent_idx] > self.best_agent_value:
+                self.best_agent_value = self.obj_values[self.current_best_agent_idx]
+                self.best_agent_idx = self.current_best_agent_idx
+                self.best_time_step = self.current_step
+                # self.best_agent = self.get_best_agent_scaled()
+            if self.obj_values[self.current_worse_agent_idx] < self.worst_agent_value:
+                self.worst_agent_value = self.obj_values[self.current_worse_agent_idx]
+                self.worse_agent_idx = self.current_worse_agent_idx
+                self.worse_agent_state = self.state[self.current_worse_agent_idx]
+        self.upper_limit = self.best_agent_value if self.use_actual_best else self.opt_obj_value
+        
 
 
     def _get_actual_state(self):
-        actual_state = self._rescale(self.state[:, :2], self.min_pos, self.max_pos)
-        # append the obj_value to the actual state
+        state = self.state.copy()
+        actual_state = self._rescale(state[:, :2], self.min_pos, self.max_pos)
         actual_state = np.append(actual_state, self.obj_values.reshape(-1, 1), axis=1)
         return actual_state
+
+    def _validate_state(self):
+        # check if self.state values is within range 0-1
+        if np.any(self.state < 0) or np.any(self.state > 1):
+            print(f"State value is out of range: {self.state}")
+            raise ValueError("State values must be within [0, 1]")
 
     def reset(self, seed: Optional[int] = None):
         #super().reset()
@@ -246,23 +287,34 @@ class OptEnv(gym.Env):
         self.stateHistory = np.zeros(shape=(self.ep_length+1, self.n_agents,  self.n_dim+1))
         self.refinement_idxs = []
         self.best_agent_idxs = []
-        self._set_episode_best_info()
+        self.best_agent_idx = np.argmin(self.obj_values) if self.minimize else np.argmax(self.obj_values)
+        self.worst_agent_idx = np.argmin(self.obj_values) if not self.minimize else np.argmax(self.obj_values)
+        self.best_agent_value = self.obj_values[self.best_agent_idx]
+        self.worst_agent_value = self.obj_values[self.worst_agent_idx]
+        self.best_time_step = 0 # the time step when the best agent is found
+        self.worst_time_step = 0 # the time step when the worst agent is found
+        self.upper_limit = self.best_agent_value if self.use_actual_best else self.opt_obj_value # the upper limit of the objective value
         self.ValueHistory[self.current_step, :] = self.obj_values
         self.bestValueHistory[self.current_step] = self.best_agent_value
-        self.stateHistory[self.current_step, :, :] = self._get_actual_state()
         self.state[:,-1] = self._scale(self.state[:,-1], self.worst_agent_value, self.upper_limit)
+        self._validate_state()
         self.refinement_idx = self._get_refinement_idxs()
         self.zprev = self.state.copy()
+        self.stateHistory[self.current_step] = self._get_actual_state() # State History changing when called
+        self.best_agent = self.get_best_agent_scaled() 
         return np.array(self.state, dtype=np.float32)
 
-    def _validate_state(self):
-        # check if self.state values is within range 0-1
-        if np.any(self.state < 0) or np.any(self.state > 1):
-            raise ValueError("State values must be within [0, 1]")
 
     ## get best agent actual position and value
     def get_best_agent(self):
         return self.stateHistory[self.best_time_step][self.best_agent_idx]
+
+    ## get best agent in the scaled space
+    def get_best_agent_scaled(self):
+        best_agent = self.stateHistory[self.best_time_step][self.best_agent_idx].copy()
+        best_agent[:2] = self._scale(best_agent[:2], self.min_pos, self.max_pos)
+        best_agent[-1] = self._scale(best_agent[-1], self.worst_agent_value, self.upper_limit)
+        return best_agent
     
     def render(self):
         raise NotImplementedError
@@ -313,6 +365,10 @@ class OptEnvCache:
     def save_envs(self, file_path):
         with open(file_path, 'wb') as f:
             pickle.dump(self.envs, f)
+    
+    def load_envs(self, file_path):
+        with open(file_path, 'rb') as f:
+            self.envs = pickle.load(f)
     
 
 if __name__ == "__main__":
