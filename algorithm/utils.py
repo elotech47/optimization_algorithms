@@ -11,7 +11,7 @@ from log import log_param
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-def prepare_environment(config:dict) -> OptEnvCache:
+def prepare_environment(config:dict, load_from_file: bool = False) -> OptEnvCache:
     """
     Prepare the environment.
     :param config: The config.
@@ -20,22 +20,31 @@ def prepare_environment(config:dict) -> OptEnvCache:
     envs_cache = OptEnvCache()
     # prepare each environment as specified in the config file and cache them
     env_config = config['environment_config']
-    for i in range(len(env_config['env_list'])):
-        # create the environment
-        func_name = env_config['env_list'][i] + "_" + f"{env_config['n_dim']}D_{env_config['n_agents']}_agents"
-        obj_func, bounds, opt_obj_value, type = get_obj_func(env_config['env_list'][i])
-        if type == 'minimize':
-            min = True
-        else:
-            min = False
-        # if n_dim is not 2D, ignore the bounds and use bounds from the config file
-        if env_config['n_dim'] != 2:
-            bounds = env_config['bounds'][i]
-        env = OptEnv(func_name, obj_func, env_config['n_agents'], env_config['n_dim'], 
-                    bounds, env_config['ep_length'], min, env_config['freeze'],opt_value=float(opt_obj_value),
-                    use_actual_best=env_config['use_actual_best'])
-        # cache the environment
-        envs_cache.add_env(func_name, env)
+    # check of the env_config['envs_cache_path'] exists
+    # if not, create it
+    if not os.path.exists(env_config['envs_cache_path']):
+       os.makedirs(env_config['envs_cache_path']) 
+    if not load_from_file:
+        for i in range(len(env_config['env_list'])):
+            # create the environment
+            func_name = env_config['env_list'][i] + "_" + f"{env_config['n_dim']}D_{env_config['n_agents']}_agents"
+            obj_func, bounds, opt_obj_value, type = get_obj_func(env_config['env_list'][i])
+            if type == 'minimize':
+                min = True
+            else:
+                min = False
+            # if n_dim is not 2D, ignore the bounds and use bounds from the config file
+            if env_config['n_dim'] != 2:
+                bounds = env_config['bounds'][i]
+            env = OptEnv(func_name, obj_func, env_config['n_agents'], env_config['n_dim'], 
+                        bounds, env_config['ep_length'], min, env_config['freeze'],opt_value=float(opt_obj_value),
+                        use_actual_best=env_config['use_actual_best'])
+            # cache the environment
+            envs_cache.add_env(func_name, env)
+        envs_cache.save_envs(env_config['envs_cache_path'] + env_config['envs_cache_file'])
+    else:
+        # load the environments from the file
+        envs_cache.load_envs(env_config['envs_cache_path'] + env_config['envs_cache_file'])
     # return the environment
     return envs_cache
 
@@ -57,7 +66,7 @@ def initialize_policy(config:dict) -> MAPPO:
     # return the policy
     return policy
 
-def exploitation_communication_topology(states, global_best, minimize=False, std_obs_type='Euclidean'):
+def exploitation_communication_topology(states, global_best, prev_state, minimize=False, std_obs_type='Euclidean'):
     """
     Exploitation communication topology.
     :param states: The states.
@@ -74,12 +83,17 @@ def exploitation_communication_topology(states, global_best, minimize=False, std
     best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     # get the distance between the agents and the global best for each dimension
     for agent in range(n_agents):
-        agent_nbs = [i for i in range(n_agents) if i != agent]
-        nb = np.random.choice(agent_nbs)
         # std = euclidean distance between the agent and the global best for dimensions except the last one
         for dim in range(n_dim):
-            obs = [-(global_best[dim] - states[agent, dim]), -(global_best[n_dim] - states[agent, n_dim]) ,-(states[nb, n_dim] - states[agent, n_dim]) ,-(states[nb, n_dim] - states[agent, n_dim]),
-                          -(states[best_agent, dim] - states[agent, dim]), -(states[best_agent, n_dim] - states[agent, n_dim]) ]
+            sorted_state = states[states[:, dim].argsort()]
+            # get the index of the sorted agents
+            sorted_agents = np.argsort(states[:, dim])
+            # get the index of the current agent in the sorted list
+            agent_index = get_array_index(sorted_state, states[agent])
+            # get the index of the agent closest to the current agent in the current dimension
+            nb = sorted_agents[agent_index - 1] if agent_index > 0 else sorted_agents[agent_index + 1]
+            obs = [(states[agent, dim] - prev_state[agent, dim]), (states[agent, n_dim] - prev_state[agent, n_dim]),(states[agent, dim] - states[nb, dim]), (states[agent, n_dim] - states[nb, n_dim]),
+                     (states[agent, dim] - global_best[dim]), (states[agent, n_dim] - global_best[n_dim])]
             observation[dim].append(np.array(obs))
             if std_obs_type == 'Euclidean':
                 std = np.linalg.norm(states[agent, :-1] - global_best[:-1])
@@ -111,19 +125,25 @@ def exploration_communication_topology(states, prev_state, minimize=False):
     # get the number of agents
     n_agents = states.shape[0]
     n_dim = states.shape[1] - 1
+    previous_state = prev_state
     # initialize the communication topology
     observation = [[] for _ in range(n_dim)]
     std_observation = [[] for _ in range(n_dim)]
     # get best agent among states
     best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     for agent in range(n_agents):
-        agent_nbs = [i for i in range(n_agents) if i != agent and i != best_agent]
-        # get a random neighbor
-        nb = np.random.choice(agent_nbs)
-        std = np.linalg.norm(states[agent, :-1] - states[nb, :-1])
+        std = np.linalg.norm(states[agent, :-1] - states[best_agent, :-1])
         for dim in range(n_dim):
-            obs = [(states[agent, dim] - prev_state[agent, dim]), (states[agent, n_dim] - prev_state[agent, n_dim]), (states[nb, dim] - prev_state[nb, dim]), (states[nb, n_dim] - prev_state[nb, n_dim]),
-                   (states[best_agent, dim] - prev_state[best_agent, dim]), (states[best_agent, n_dim] - prev_state[best_agent, n_dim])]
+            # sort the agents based on increasing distance in the current dimension
+            sorted_state = states[states[:, dim].argsort()]
+            # get the index of the sorted agents
+            sorted_agents = np.argsort(states[:, dim])
+            # get the index of the current agent in the sorted list
+            agent_index = get_array_index(sorted_state, states[agent])
+            # get the index of the agent closest to the current agent in the current dimension
+            nb = sorted_agents[agent_index - 1] if agent_index > 0 else sorted_agents[agent_index + 1]
+            obs = [(states[agent, dim] - previous_state[agent, dim]), (states[agent, n_dim] - previous_state[agent, n_dim]), (states[agent, dim] - states[nb, dim]), (states[agent, n_dim] - states[nb, n_dim]),
+                     (states[agent, dim] - states[best_agent, dim]), (states[agent, n_dim] - states[best_agent, n_dim])]
             observation[dim].append(np.array(obs))
             std_observation[dim].append(std)
 
@@ -131,7 +151,23 @@ def exploration_communication_topology(states, prev_state, minimize=False):
     std_observation_ = [np.array(std_observation[dim]).reshape(n_agents, 1) for dim in range(n_dim)]
     return observation_, std_observation_
 
-def general_communication_topology(states, global_best, minimize=False):
+def get_array_index(arrays, sub_array):
+    """
+    Get the index of the sub-array in the array.
+    :param arrays: The array.
+    :param sub_array: The sub-array.
+    :return: The index of the sub-array in the array.
+    """
+    index = None
+    for i, array in enumerate(arrays):
+        if np.array_equal(array, sub_array):
+            index = i
+            break
+    if index is None:
+        raise ValueError('The sub-array is not in the array.')
+    return index
+
+def general_communication_topology(states, global_best, previous_state, minimize=False):
     """
     General communication topology.
     :param states: The states.
@@ -147,14 +183,18 @@ def general_communication_topology(states, global_best, minimize=False):
     # get the distance between the agents for each dimension
     best_agent = np.argmin(states[:, -1]) if minimize else np.argmax(states[:, -1])
     for agent in range(n_agents):
-        agent_nbs = [i for i in range(n_agents) if i != agent]
-        # get a random neighbor
-        nb = np.random.choice(agent_nbs)
         std = np.linalg.norm(states[agent, :-1] - states[best_agent, :-1])
         for dim in range(n_dim):
-            obs = [(global_best[dim] - states[agent, dim]), (global_best[n_dim] - states[agent, n_dim]), (states[best_agent, dim] - states[agent, dim]), 
-                        (states[best_agent, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]) ,(states[nb, n_dim] - states[agent, n_dim]),
-                        ]
+            # sort the agents based on increasing distance in the current dimension
+            sorted_state = states[states[:, dim].argsort()]
+            # get the index of the sorted agents
+            sorted_agents = np.argsort(states[:, dim])
+            # get the index of the current agent in the sorted list
+            agent_index = get_array_index(sorted_state, states[agent])
+            # get the index of the agent closest to the current agent in the current dimension
+            nb = sorted_agents[agent_index - 1] if agent_index > 0 else sorted_agents[agent_index + 1]
+            obs = [(states[agent, dim] - previous_state[agent, dim]), (states[agent, n_dim] - previous_state[agent, n_dim]), (states[agent, dim] - states[nb, dim]), (states[agent, n_dim] - states[nb, n_dim]),
+                     (states[agent, dim] - states[best_agent, dim]), (states[agent, n_dim] - states[best_agent, n_dim])]
             observation[dim].append(np.array(obs))
             std_observation[dim].append(std)
 
@@ -178,7 +218,7 @@ def generate_observations(env: OptEnv, split=False, std_obs_type='distance') -> 
     if split:
         refinement_idx = env.refinement_idx
         # get the communication topology for exploitation
-        exploit_observation, exploit_std_observation = exploitation_communication_topology(states, global_best, env.minimize, std_obs_type)
+        exploit_observation, exploit_std_observation = exploitation_communication_topology(states, global_best, env.zprev, env.minimize, std_obs_type)
         # get the communication topology for exploration
         explore_observation, explore_std_observation = exploration_communication_topology(states, env.zprev, env.minimize)
         # combine the both observation and std_observation based on the reinforcement_idx
@@ -196,16 +236,12 @@ def generate_observations(env: OptEnv, split=False, std_obs_type='distance') -> 
             std_observation.append(np.array(std_obs))
     else:
         # get the communication topology for general case
-        observation, std_observation = general_communication_topology(states, global_best, env.minimize)
+        observation, std_observation = general_communication_topology(states, global_best, env.zprev, env.minimize)
     return observation, std_observation
 
 
-def animate(env:OptEnv, env_id, iter, config:dict, gif_dir, low_quality=True):
+def animate(env:OptEnv, config:dict, gif_dir:str, function_name:str,  low_quality=True):
     plot_directory = config['environment_config']['plot_directory']
-    env_name = env_name = config['environment_config']['env_list'][env_id] + "_" + f"{config['environment_config']['n_dim']}D_{config['environment_config']['n_agents']}_agents"
-    title = env_name + f"_{iter}_.gif"
-    opt_func_name = config['environment_config']['env_list'][env_id]
-    ep_length = env.ep_length
     fps = config['environment_config']['fps']
     count = 0
     agents_pos = env.stateHistory
@@ -239,7 +275,7 @@ def animate(env:OptEnv, env_id, iter, config:dict, gif_dir, low_quality=True):
                                Line2D([0], [0], marker=markers[0], color='w', label='Exploration Agents', markerfacecolor='r', markersize=15)]
             plt.legend(handles=legend_elements, loc='upper right', fontsize=15)
         #plt.pause(0.5)
-        plt.title(opt_func_name, fontsize=30)
+        plt.title(function_name, fontsize=30)
         plt.xlabel("x", fontsize=30)
         plt.ylabel("y", fontsize=30)
         plt.tick_params(axis='both', which='major', labelsize=20)
@@ -257,7 +293,7 @@ def animate(env:OptEnv, env_id, iter, config:dict, gif_dir, low_quality=True):
     for filename in filenames:
         images.append(imageio.imread(plot_directory + filename))
     # if gif folder not prsent create it
-    gif_dir_ = gif_dir + title + ".gif"
+    gif_dir_ = gif_dir + function_name + ".gif"
     imageio.mimsave(gif_dir_, images, fps=fps)
     for filename in set(filenames):
         os.remove(plot_directory + filename)
