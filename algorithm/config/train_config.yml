@@ -1,5 +1,5 @@
 environment_config:
-  n_agents: 14
+  n_agents: 10
   n_dim: 2
   ep_length: 30
   freeze: True
@@ -10,20 +10,21 @@ environment_config:
   plot_directory: plots/
   gif_directory: gifs/
   fps: 2
-  env_id: [2, 3, 4]
+  env_id: [2, 4]
   change_freq: 5000
   log_directory: logs/
-  log_interval: 100
+  log_interval: 1000
   use_actual_best: False
-
-
+  gif_log_freq: 1000
+  envs_cache_path: environment/
+  envs_cache_file: opt_env.pickle
 
 policy_config:
-  state_dim: 4
+  state_dim: 6
   action_dim: 1
   init_std: 0.2
-  std_min: 0.01
-  std_max: 0.5
+  std_min: 0.02
+  std_max: 0.2
   std_type: linear
   fixed_std: True
   hidden_dim: [16, 16]
@@ -43,11 +44,13 @@ policy_config:
   update_interval: 10
   save_interval: 2000
   model_path: models/
-  test_model_path: models/20230111-090458_model/_20000
+  test_model_path: models/models_20000
   animate_interval: 2000
   std_decay_freq: 100
   std_decay_rate: 0.001
   std_obs_type: distance
+  loss_log_freq: 10
+  reward_log_freq: 100
   
 
 test_policy_config:
@@ -68,14 +71,14 @@ test_policy_config:
   initialization: 
   pretrained: False
   ckpt_path: 
-  split_agent: True
+  split_agent: False
   split_fraq: 0.5
   explore_state_dim: 6
   exploit_state_dim: 6
-  update_interval: 10
+  update_interval: 20
   save_interval: 2000
   model_path: models/
-  test_model_path: models/20230113-164756_model/_20000
+  test_model_path: models/models_20000
   animate_interval: 2000
   std_decay_freq: 100
   std_decay_rate: 0.001
